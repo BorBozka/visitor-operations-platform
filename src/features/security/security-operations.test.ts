@@ -6,6 +6,7 @@ import {
   getExpectedSecurityVisits,
   getInsideSecurityVisits,
   groupExpectedSecurityVisits,
+  hasSecurityNote,
 } from "./security-operations"
 
 function makeVisit(id: string, status: VisitStatus, plannedStart: string, overrides: Partial<Visit> = {}): Visit {
@@ -108,5 +109,15 @@ describe("security operations search", () => {
 
   it("returns no records for an unrelated search", () => {
     expect(filterSecurityVisitRows(rows, "eşleşmeyen")).toEqual([])
+  })
+})
+
+describe("security note visibility", () => {
+  it.each([undefined, "", "   "])("hides the note icon for an empty note (%s)", (note) => {
+    expect(hasSecurityNote(note)).toBe(false)
+  })
+
+  it("shows the note icon for a non-empty note", () => {
+    expect(hasSecurityNote("Girişte güvenliği bilgilendirin.")).toBe(true)
   })
 })

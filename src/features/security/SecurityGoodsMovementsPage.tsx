@@ -64,7 +64,7 @@ export function SecurityGoodsMovementsPage() {
       <label className="relative shrink-0">
         <span className="sr-only">Firma, mal veya referans ara</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-        <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Firma, mal veya referans ara" aria-label="Firma, mal veya referans ara" className="h-9 border-slate-200/70 bg-slate-50/80 pl-9 shadow-none transition-colors placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0" />
+        <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Firma, mal veya referans ara" aria-label="Firma, mal veya referans ara" className="h-9 border-slate-200/70 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0" />
       </label>
 
       <div className="grid min-h-0 flex-1 grid-rows-2 gap-3 overflow-hidden lg:grid-cols-2 lg:grid-rows-1">

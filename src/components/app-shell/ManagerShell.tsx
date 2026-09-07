@@ -12,7 +12,7 @@ import {
   Users,
   Building2,
 } from "lucide-react"
-import { lazy, Suspense, useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { NavLink, Outlet, useLocation } from "react-router-dom"
 
 import bplasLogo from "@/assets/bplas-logo.svg"
@@ -39,9 +39,6 @@ import { formatTr } from "@/lib/date"
 import { cn } from "@/lib/utils"
 
 const personalNavigationItems = (basePath: string) => [{ label: "Ziyaretlerim", icon: CalendarDays, to: `${basePath}/my-visits` }]
-const VisitFormDialog = lazy(() =>
-  import("@/features/visits/VisitFormDialog").then((module) => ({ default: module.VisitFormDialog })),
-)
 const managementNavigationItems = (basePath: string) => [
   { label: "Dashboard", icon: LayoutDashboard, to: `${basePath}/dashboard` },
   { label: "Tüm Ziyaretler", icon: CalendarDays, to: `${basePath}/all-visits` },
@@ -157,16 +154,45 @@ function ManagerSidebar({ collapsed, onCollapsedChange, role, basePath }: { coll
 }
 
 function ManagerNotifications({ collapsed }: { collapsed: boolean }) {
-  const { visits } = useVisits()
-  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null)
+  const { visits, sendVisitInvitation } = useVisits()
   const [dismissedVisitIds, setDismissedVisitIds] = useState<Set<string>>(() => new Set())
+  const [sendingVisitIds, setSendingVisitIds] = useState<Set<string>>(() => new Set())
+  const [failedVisitIds, setFailedVisitIds] = useState<Set<string>>(() => new Set())
+  const [sentVisitIds, setSentVisitIds] = useState<Set<string>>(() => new Set())
+  const sendingVisitIdsRef = useRef(new Set<string>())
   const pendingInvitations = getVisiblePendingInvitationVisits(visits, dismissedVisitIds)
   const allPendingInvitations = getVisiblePendingInvitationVisits(visits, new Set())
-  const selectedVisit = visits.find((visit) => visit.id === selectedVisitId)
+  const visibleInvitationIds = new Set([...pendingInvitations.map((visit) => visit.id), ...sentVisitIds])
+  const notificationInvitations = visits.filter((visit) => visibleInvitationIds.has(visit.id))
+
+  const sendInvitation = async (visitId: string) => {
+    if (sendingVisitIdsRef.current.has(visitId)) return
+
+    sendingVisitIdsRef.current.add(visitId)
+    setSendingVisitIds(new Set(sendingVisitIdsRef.current))
+    setFailedVisitIds((current) => {
+      const next = new Set(current)
+      next.delete(visitId)
+      return next
+    })
+    try {
+      const result = await sendVisitInvitation(visitId)
+      if (result.invitationStatus === "SENT") {
+        setSentVisitIds((current) => new Set(current).add(visitId))
+      } else if (result.invitationStatus === "FAILED") {
+        setFailedVisitIds((current) => new Set(current).add(visitId))
+      }
+    } catch {
+      setFailedVisitIds((current) => new Set(current).add(visitId))
+    } finally {
+      sendingVisitIdsRef.current.delete(visitId)
+      setSendingVisitIds(new Set(sendingVisitIdsRef.current))
+    }
+  }
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={(open) => { if (!open) setSentVisitIds(new Set()) }}>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
@@ -197,52 +223,44 @@ function ManagerNotifications({ collapsed }: { collapsed: boolean }) {
             </Button>
           </div>
           <div className="max-h-[min(28rem,calc(100vh-7rem))] overflow-y-auto">
-            {pendingInvitations.length === 0 ? (
+            {notificationInvitations.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-slate-500">Eylem bekleyen davet yok.</p>
-            ) : pendingInvitations.map((visit) => (
-              <DropdownMenuItem
-                key={visit.id}
-                className="items-start gap-3 rounded-none border-b border-slate-100 px-3 py-2 whitespace-normal hover:bg-slate-50 focus:bg-slate-50 last:border-b-0"
-                aria-label={`${visit.visitor.firstName} ${visit.visitor.lastName} için bildirim`}
-                onSelect={() => setSelectedVisitId(visit.id)}
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-slate-900">{visit.visitor.firstName} {visit.visitor.lastName}</p>
-                  <p className="mt-0.5 truncate text-[11px] text-slate-500">{formatTr(new Date(visit.plannedStart), "d MMM yyyy · HH:mm")}</p>
-                  {visit.invitationStatus !== "SENDING" && <InvitationNotificationStatus status={visit.invitationStatus} />}
-                </div>
-                {visit.invitationStatus === "SENDING" ? (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700" role="status">
-                    <LoaderCircle className="size-3 animate-spin" />Gönderiliyor…
-                  </span>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 shrink-0 px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 hover:text-blue-800"
-                    onClick={(event) => { event.stopPropagation(); setSelectedVisitId(visit.id) }}
-                  >
-                    {visit.invitationStatus === "FAILED" ? "Yeniden gönder" : "Daveti gönder"}
-                  </Button>
-                )}
-              </DropdownMenuItem>
-            ))}
+            ) : notificationInvitations.map((visit) => {
+              const isSending = visit.invitationStatus === "SENDING" || sendingVisitIds.has(visit.id)
+              const invitationStatus: InvitationStatus = isSending ? "SENDING" : failedVisitIds.has(visit.id) ? "FAILED" : visit.invitationStatus
+              return (
+                <DropdownMenuItem
+                  key={visit.id}
+                  className="items-start gap-3 rounded-none border-b border-slate-100 px-3 py-2 whitespace-normal hover:bg-slate-50 focus:bg-slate-50 last:border-b-0"
+                  aria-label={`${visit.visitor.firstName} ${visit.visitor.lastName} için bildirim`}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-semibold text-slate-900">{visit.visitor.firstName} {visit.visitor.lastName}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{formatTr(new Date(visit.plannedStart), "d MMM yyyy · HH:mm")}</p>
+                    {invitationStatus !== "SENDING" && <InvitationNotificationStatus status={invitationStatus} />}
+                  </div>
+                  {invitationStatus === "SENDING" ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700" role="status">
+                      <LoaderCircle className="size-3 animate-spin" />Gönderiliyor…
+                    </span>
+                  ) : invitationStatus !== "SENT" ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 shrink-0 px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 hover:text-blue-800"
+                      onClick={(event) => { event.stopPropagation(); void sendInvitation(visit.id) }}
+                    >
+                      {invitationStatus === "FAILED" ? "Yeniden gönder" : "Daveti gönder"}
+                    </Button>
+                  ) : null}
+                </DropdownMenuItem>
+              )
+            })}
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {selectedVisit && (
-        <Suspense fallback={null}>
-          <VisitFormDialog
-            open
-            onOpenChange={(open) => !open && setSelectedVisitId(null)}
-            visit={selectedVisit}
-            invitationScope="VISIT"
-            onSaved={() => undefined}
-          />
-        </Suspense>
-      )}
     </>
   )
 }

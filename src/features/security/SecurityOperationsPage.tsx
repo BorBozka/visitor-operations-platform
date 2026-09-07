@@ -1,7 +1,8 @@
-import { Search } from "lucide-react"
+import { MessageSquareText, Search } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import type { Visit } from "@/domain/visits"
 import { SecurityCheckInDialog } from "@/features/security/SecurityCheckInDialog"
@@ -19,8 +20,14 @@ import {
   getInsideSecurityVisits,
   getSecurityScopedVisits,
   groupExpectedSecurityVisits,
+  hasSecurityNote,
   type SecurityVisitRow,
 } from "./security-operations"
+
+interface SecurityNoteControl {
+  openNoteVisitId: string | null
+  onNoteOpenChange(visitId: string, open: boolean): void
+}
 
 export function SecurityOperationsPage() {
   const { visits, referenceData, isLoading, error, reload } = useVisits()
@@ -31,6 +38,7 @@ export function SecurityOperationsPage() {
   const [cardIssues, setCardIssues] = useState<SecurityCardIssue[]>([])
   const [cardReturnsOpen, setCardReturnsOpen] = useState(false)
   const [unplannedVisitOpen, setUnplannedVisitOpen] = useState(false)
+  const [openNoteVisitId, setOpenNoteVisitId] = useState<string | null>(null)
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(new Date()), 30_000)
@@ -69,6 +77,10 @@ export function SecurityOperationsPage() {
     await reload()
   }
 
+  const changeOpenNote = (visitId: string, open: boolean) => {
+    setOpenNoteVisitId((current) => open ? visitId : current === visitId ? null : current)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
       <h1 className="sr-only">Güvenlik Operasyonu</h1>
@@ -83,7 +95,7 @@ export function SecurityOperationsPage() {
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Ziyaretçi, firma veya ev sahibi ara"
             aria-label="Ziyaretçi, firma veya ev sahibi ara"
-            className="h-9 border-slate-200/70 bg-slate-50/80 pl-9 shadow-none transition-colors placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0"
+            className="h-9 border-slate-300 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-500 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0"
           />
         </label>
 
@@ -102,8 +114,8 @@ export function SecurityOperationsPage() {
             : error ? <PanelState message={error} tone="error" />
               : expectedRows.length === 0 ? <PanelState message={search.trim() ? "Aramayla eşleşen kayıt yok." : "Bugün beklenen ziyaret yok."} />
                 : <div className="py-1">
-                    {expectedGroups.delayed.length > 0 && <ExpectedVisitGroup title="Gecikenler" rows={expectedGroups.delayed} onCheckIn={setCheckInTarget} />}
-                    {expectedGroups.upcoming.length > 0 && <ExpectedVisitGroup title="Sıradakiler" rows={expectedGroups.upcoming} onCheckIn={setCheckInTarget} />}
+                    {expectedGroups.delayed.length > 0 && <ExpectedVisitGroup title="Gecikenler" rows={expectedGroups.delayed} onCheckIn={setCheckInTarget} openNoteVisitId={openNoteVisitId} onNoteOpenChange={changeOpenNote} />}
+                    {expectedGroups.upcoming.length > 0 && <ExpectedVisitGroup title="Sıradakiler" rows={expectedGroups.upcoming} onCheckIn={setCheckInTarget} openNoteVisitId={openNoteVisitId} onNoteOpenChange={changeOpenNote} />}
                   </div>}
         </OperationPanel>
 
@@ -157,18 +169,18 @@ function OperationPanel({ title, count, ariaLabel, children }: { title: string; 
   )
 }
 
-function ExpectedVisitGroup({ title, rows, onCheckIn }: { title: string; rows: SecurityVisitRow[]; onCheckIn(visit: Visit): void }) {
+function ExpectedVisitGroup({ title, rows, onCheckIn, openNoteVisitId, onNoteOpenChange }: { title: string; rows: SecurityVisitRow[]; onCheckIn(visit: Visit): void } & SecurityNoteControl) {
   return (
     <section className="py-1.5" aria-label={title}>
       <h3 className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{title}</h3>
       <ul>
-        {rows.map((row, index) => <ExpectedRow key={row.visit.id} row={row} isFirst={index === 0} isLast={index === rows.length - 1} onCheckIn={onCheckIn} />)}
+        {rows.map((row, index) => <ExpectedRow key={row.visit.id} row={row} isFirst={index === 0} isLast={index === rows.length - 1} onCheckIn={onCheckIn} openNoteVisitId={openNoteVisitId} onNoteOpenChange={onNoteOpenChange} />)}
       </ul>
     </section>
   )
 }
 
-function ExpectedRow({ row, isFirst, isLast, onCheckIn }: { row: SecurityVisitRow; isFirst: boolean; isLast: boolean; onCheckIn(visit: Visit): void }) {
+function ExpectedRow({ row, isFirst, isLast, onCheckIn, openNoteVisitId, onNoteOpenChange }: { row: SecurityVisitRow; isFirst: boolean; isLast: boolean; onCheckIn(visit: Visit): void } & SecurityNoteControl) {
   const { visit, isDelayed } = row
   return (
     <li className="relative border-b border-slate-100 last:border-b-0">
@@ -180,7 +192,10 @@ function ExpectedRow({ row, isFirst, isLast, onCheckIn }: { row: SecurityVisitRo
           <span className="relative size-1.5 rounded-full border border-slate-300 bg-white" />
         </div>
         <div className="col-start-3 row-span-2 row-start-1 flex min-w-0 flex-col justify-center">
-          <span className="min-w-0 truncate text-xs font-semibold text-slate-900">{visit.visitor.firstName} {visit.visitor.lastName}</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-xs font-semibold text-slate-900">{visit.visitor.firstName} {visit.visitor.lastName}</span>
+            <SecurityNotePopover visitId={visit.id} note={visit.note} open={openNoteVisitId === visit.id} onOpenChange={onNoteOpenChange} />
+          </div>
           <p className="mt-1 truncate text-[11px] text-slate-500">{visit.visitTypeName} · {visit.visitor.company} · {visit.hostEmployeeName}</p>
         </div>
         <div className="col-start-4 row-span-2 row-start-1 flex items-center justify-end">
@@ -210,6 +225,41 @@ function InsideRow({ row, onCheckOut }: { row: SecurityVisitRow; onCheckOut(visi
         </div>
       </div>
     </li>
+  )
+}
+
+function SecurityNotePopover({ visitId, note, open, onOpenChange }: { visitId: string; note?: string; open: boolean; onOpenChange(visitId: string, open: boolean): void }) {
+  if (!hasSecurityNote(note)) return null
+  const normalizedNote = note?.trim() ?? ""
+
+  return (
+    <DropdownMenu modal={false} open={open} onOpenChange={(nextOpen) => onOpenChange(visitId, nextOpen)}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Güvenliğe bırakılan notu görüntüleyin"
+          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+        >
+          <MessageSquareText className="size-3.5" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="center"
+        side="right"
+        sideOffset={6}
+        collisionPadding={12}
+        className="w-[min(20rem,calc(100vw-1.5rem))] min-w-0 overflow-hidden p-0"
+        aria-label="Güvenliğe bırakılan notu görüntüleyin"
+        onFocusOutside={(event) => event.preventDefault()}
+      >
+        <div className="border-b bg-slate-50/80 px-3 py-2">
+          <p className="text-xs font-semibold text-slate-900">Güvenlik notu</p>
+        </div>
+        <div className="min-w-0 overflow-x-hidden px-3 py-2.5">
+          <p className="min-w-0 whitespace-pre-wrap break-words text-xs leading-5 text-slate-700">{normalizedNote}</p>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

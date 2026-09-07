@@ -13,11 +13,22 @@ describe("ManagerNotifications", () => {
     expect(componentSource).toContain("Gönderim başarısız")
     expect(componentSource).toContain("Davet gönderilmedi")
     expect(componentSource).toContain("Gönderiliyor…")
-    expect(componentSource).toContain('visit.invitationStatus !== "SENDING"')
+    expect(componentSource).toContain('invitationStatus !== "SENDING"')
     expect(componentSource).toContain("Yeniden gönder")
     expect(componentSource).toContain("max-h-[min(28rem,calc(100vh-7rem))]")
     expect(componentSource).toContain("setDismissedVisitIds")
     expect(componentSource).not.toContain("Bildirimleri temizle")
+  })
+
+  it("sends notification invitations directly without opening the visit form", () => {
+    expect(componentSource).toContain("sendVisitInvitation(visitId)")
+    expect(componentSource).toContain("void sendInvitation(visit.id)")
+    expect(componentSource).toContain("sendingVisitIdsRef.current.has(visitId)")
+    expect(componentSource).toContain('result.invitationStatus === "SENT"')
+    expect(componentSource).toContain('result.invitationStatus === "FAILED"')
+    expect(componentSource).not.toContain("setSelectedVisitId")
+    expect(componentSource).not.toContain("VisitFormDialog")
+    expect(componentSource).not.toContain('invitationScope="VISIT"')
   })
 })
 

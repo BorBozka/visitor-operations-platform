@@ -56,7 +56,7 @@ export function ResourceCatalogPage() {
 
   const setTableSectionRefs = (node: HTMLElement | null) => {
     tableSectionRef.current = node
-    tableViewportRef.current = node
+    tableViewportRef(node)
   }
 
   useEffect(() => {

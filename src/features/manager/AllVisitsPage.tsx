@@ -80,7 +80,7 @@ export function AllVisitsPage() {
   const { ref: tableViewportRef, height: tableViewportHeight } = useFillViewportHeight<HTMLElement>(14, [filteredVisits.length])
   const setTableSectionRefs = (node: HTMLElement | null) => {
     tableSectionRef.current = node
-    tableViewportRef.current = node
+    tableViewportRef(node)
   }
   const pageCount = getPageCount(filteredVisits.length)
   const page = queryState?.page ?? 1

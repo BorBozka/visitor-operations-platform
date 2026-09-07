@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type DependencyList } from "react"
+import { useCallback, useLayoutEffect, useState, type DependencyList } from "react"
 
 // Measures how much real (visual) viewport space is left below the returned element and reports
 // it as a CSS height for that element, so a page section can fill the rest of the screen without
@@ -11,12 +11,25 @@ import { useLayoutEffect, useRef, useState, type DependencyList } from "react"
 // under/overshoot by the zoom factor. Probing the element with a known height first measures
 // that factor directly instead of assuming a fixed value that would silently drift if the shell's
 // zoom level ever changes.
+//
+// The measured element is held in state behind a callback ref rather than in a ref object: a page
+// may mount it on a commit that changes none of `deps` (Reports renders a skeleton until its own
+// dataset resolves, long after the caller's other dependencies settled). Keying the layout effect
+// on the element makes attachment itself a measurement trigger, so the returned height can never
+// stay undefined while the element is on screen.
 export function useFillViewportHeight<T extends HTMLElement = HTMLDivElement>(bottomGutterPx = 16, deps: DependencyList = []) {
-  const ref = useRef<T>(null)
+  const [element, setElement] = useState<T | null>(null)
+  // A detach is ignored on purpose: React re-invokes a callback ref with null and then with the
+  // same node whenever the caller passes an inline function, and re-attaching the element we are
+  // already measuring must not schedule any work. A genuine element swap still lands here as a
+  // different node, and an unmount is handled by the layout effect cleanup.
+  const ref = useCallback((node: T | null) => {
+    if (node === null) return
+    setElement((current) => (current === node ? current : node))
+  }, [])
   const [height, setHeight] = useState<number>()
 
   useLayoutEffect(() => {
-    const element = ref.current
     if (!element) return
 
     const measure = () => {
@@ -42,7 +55,7 @@ export function useFillViewportHeight<T extends HTMLElement = HTMLDivElement>(bo
       observer.disconnect()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bottomGutterPx, ...deps])
+  }, [element, bottomGutterPx, ...deps])
 
   return { ref, height }
 }

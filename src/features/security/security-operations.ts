@@ -13,6 +13,10 @@ export interface ExpectedSecurityVisitGroups {
   upcoming: SecurityVisitRow[]
 }
 
+export function hasSecurityNote(note: string | undefined) {
+  return Boolean(note && note.trim().length > 0)
+}
+
 export function getSecurityScopedVisits(visits: Visit[], companyId: string, facilityId: string) {
   return visits.filter((visit) => visit.hostCompanyId === companyId && visit.facilityId === facilityId)
 }

@@ -49,7 +49,7 @@ describe("SecurityOperationsPage contract", () => {
     expect(pageSource).not.toContain('StatusPill')
     expect(pageSource).toContain('{visit.visitTypeName} · {visit.visitor.company} · {visit.hostEmployeeName}</p>')
     expect(pageSource).not.toContain('rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{visit.visitTypeName}</span>')
-    expect(pageSource).toContain('className="h-9 border-slate-200/70 bg-slate-50/80 pl-9 shadow-none transition-colors placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0"')
+    expect(pageSource).toContain('className="h-9 border-slate-300 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-500 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0"')
   })
 
   it("keeps the second row limited to the operation search and actions", () => {
@@ -94,8 +94,7 @@ describe("SecurityOperationsPage contract", () => {
     expect(pageSource).toContain("Çıkış yap")
   })
 
-  it("keeps the İçeride panel free of the row overflow menu and the in-page correction dialog", () => {
-    expect(pageSource).not.toContain("DropdownMenu")
+  it("keeps the İçeride panel free of the row overflow action and the in-page correction dialog", () => {
     expect(pageSource).not.toContain("MoreHorizontal")
     expect(pageSource).not.toContain("Bilgileri düzelt")
     expect(pageSource).not.toContain("SecurityVisitorCorrectionDialog")
@@ -112,5 +111,20 @@ describe("SecurityOperationsPage contract", () => {
     expect(pageSource).not.toContain("visitorCardNumber")
     expect(pageSource).not.toContain("cardLabel")
     expect(pageSource).not.toContain("#{")
+  })
+
+  it("keeps the shared slate note popover in expected rows only", () => {
+    expect(pageSource).toContain("function SecurityNotePopover")
+    expect(pageSource.match(/<SecurityNotePopover/g)).toHaveLength(1)
+    const insideRowSource = pageSource.slice(pageSource.indexOf("function InsideRow"), pageSource.indexOf("function SecurityNotePopover"))
+    expect(insideRowSource).not.toContain("SecurityNotePopover")
+    expect(pageSource).toContain("note={visit.note}")
+    expect(pageSource).toContain('aria-label="Güvenliğe bırakılan notu görüntüleyin"')
+    expect(pageSource).toContain('className="flex min-w-0 items-center gap-1.5"')
+    expect(pageSource).toContain('className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600')
+    expect(pageSource).toContain('className="col-start-4 row-span-2 row-start-1 flex items-center justify-end">')
+    expect(pageSource).toContain('side="right"')
+    expect(pageSource).toContain('className="w-[min(20rem,calc(100vw-1.5rem))] min-w-0 overflow-hidden p-0"')
+    expect(pageSource).toContain('className="min-w-0 whitespace-pre-wrap break-words text-xs leading-5 text-slate-700"')
   })
 })
