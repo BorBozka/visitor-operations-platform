@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
 const tabSource = readFileSync(resolve(process.cwd(), "src/features/reports/FleetReportTab.tsx"), "utf8")
+const pageSource = readFileSync(resolve(process.cwd(), "src/features/reports/ReportsPage.tsx"), "utf8")
 const dialogSource = readFileSync(resolve(process.cwd(), "src/features/reports/FleetAssignmentDetailDialog.tsx"), "utf8")
 const chartSource = readFileSync(resolve(process.cwd(), "src/features/reports/FleetLoadChart.tsx"), "utf8")
 
@@ -39,6 +40,42 @@ describe("Fleet report records UI contract", () => {
 
   it("waits for assignment loading before normalizing a restored page", () => {
     expect(tabSource).toContain('workspace.view !== "records" || !assignmentsLoaded')
+  })
+})
+
+describe("Fleet analysis UI contract", () => {
+  it("merges the analysis workspace with the filter card and removes both headings", () => {
+    expect(tabSource).not.toContain("Araç / Şoför Analizi")
+    expect(tabSource).not.toContain('fleet-analysis-title')
+    expect(tabSource).toContain('className="flex h-full min-h-0 flex-col overflow-hidden bg-card px-3 py-2" aria-label="Araç / şoför analizi"')
+  })
+
+  it("places the performance metrics and resource context above the unchanged load chart", () => {
+    const metricsIndex = tabSource.indexOf('aria-label="Araç / şoför analiz metrikleri"')
+    const chartIndex = tabSource.indexOf('className="mt-3 min-h-0 flex-1"')
+    expect(metricsIndex).toBeGreaterThan(-1)
+    expect(chartIndex).toBeGreaterThan(metricsIndex)
+    expect(tabSource).toContain('FleetLoadChart resources={chartResources} dimension={workspace.dimension}')
+    expect(tabSource).toContain('{metrics.usedVehicleCount} araç · {metrics.usedDriverCount} şoför')
+    expect(tabSource).toContain('className="ml-auto shrink-0 text-right text-[10px] leading-normal tabular-nums text-slate-500"')
+    expect(tabSource).not.toContain("buildFleetInsight")
+  })
+
+  it("uses the visits-style value, label and delta sequence without the old metadata line", () => {
+    expect(tabSource).toContain('<FleetAnalysisMetric value={String(metrics.totalAssignments)} label="Görev"')
+    expect(tabSource).toContain('<FleetAnalysisMetric value={String(metrics.cancelledAssignments)} label="İptal"')
+    expect(tabSource).toContain('<p className="text-[10px] leading-normal text-slate-500">{label}</p>{delta &&')
+    expect(tabSource).toContain('className="min-w-0 flex-1"')
+    expect(tabSource).not.toContain('className="max-w-full text-right text-[11px] tabular-nums text-slate-500">{metadata}</p>')
+  })
+
+  it("makes only record-backed metrics interactive and keeps planned load passive", () => {
+    expect(tabSource).toContain('onActivate={() => openRecordsForMetric("all")}')
+    expect(tabSource).toContain('onActivate={() => openRecordsForMetric("cancelled")}')
+    expect(tabSource).toContain('<FleetAnalysisMetric value={formatDurationMinutes(metrics.plannedLoadMinutes)} label="Planlama yükü" delta={plannedLoadDelta} favorableDirection="increase" />')
+    expect(tabSource).toContain("filterFleetReportRecordsByStatus(reportAssignments, workspace.status)")
+    expect(pageSource).toContain("<FleetRecordsStatusFilter value={fleetWorkspace.status}")
+    expect(pageSource).toContain('<option value="cancelled">İptal</option>')
   })
 })
 

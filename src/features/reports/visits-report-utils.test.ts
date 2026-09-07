@@ -3,29 +3,32 @@ import { describe, expect, it } from "vitest"
 import type { Visit } from "@/domain/visits"
 import type { ReportsScopeFilters } from "@/features/reports/reports-filters"
 import {
-  buildVisitsReportSummarySentences,
   calculateSharedTrendYAxisMax,
   calculateVisitsReportDailyTrend,
   calculateVisitsReportHourlyTrendWithStatus,
   calculateVisitsReportKpis,
-  calculateVisitsReportLateArrivalRate,
   calculateVisitsReportTrendWithStatus,
   calculateVisitsReportWeeklyTrendWithStatus,
+  buildVisitsTrendSeries,
+  calculateVisitsTrendAxes,
   calculateVisitsTrendYAxis,
-  findVisitsReportBusiestPeriods,
   formatVisitsReportDelta,
+  getVisitsMetricDeltaTone,
   filterVisitsForReport,
+  filterVisitsReportRecordsByStatus,
   getReportPageRange,
   getVisitsTrendBarSizing,
   getVisitsTrendTooltipPeriodContext,
   getReportPageCount,
   getVisitDelayMinutes,
+  getVisitLateDepartureMinutes,
   getVisitDurationMinutes,
   getVisitReportStatusGroup,
   groupVisitsReportDailyTrendByOutcome,
   paginateReportVisits,
   searchVisitsReportRecords,
   sortVisitsReportRecords,
+  withVisitsTrendOngoingSegment,
   VISITS_REPORT_PAGE_SIZE,
   VISITS_REPORT_STATUS_LABELS,
 } from "@/features/reports/visits-report-utils"
@@ -92,6 +95,38 @@ describe("getVisitDelayMinutes", () => {
   })
 })
 
+describe("filterVisitsReportRecordsByStatus", () => {
+  const filteredVisits = [
+    visit("late-arrival", "2026-08-10T08:00:00+03:00", { firstName: "Ayşe", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", actualCheckIn: "2026-08-10T08:15:00+03:00" }),
+    visit("completed", "2026-08-10T08:00:00+03:00", { firstName: "Bora", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", status: "CHECKED_OUT", actualCheckIn: "2026-08-10T08:00:00+03:00" }),
+    visit("other-company", "2026-08-10T08:00:00+03:00", { firstName: "Ayşe", companyId: "bplas-otomotiv", facilityId: "otomotiv-uretim", employeeId: "selin-aydin", actualCheckIn: "2026-08-10T08:20:00+03:00" }),
+  ]
+
+  it("applies status after the date/company scope and before the records search with AND semantics", () => {
+    const scoped = filterVisitsForReport(filteredVisits, { ...baseFilters, companyId: "bplas" })
+    const lateArrivals = filterVisitsReportRecordsByStatus(scoped, "late-arrival")
+    expect(ids(searchVisitsReportRecords(lateArrivals, "ayşe"))).toEqual(["late-arrival"])
+  })
+
+  it("uses the same late-arrival helper outcome as the KPI count", () => {
+    const kpis = calculateVisitsReportKpis(filteredVisits)
+    expect(filterVisitsReportRecordsByStatus(filteredVisits, "late-arrival")).toHaveLength(kpis.lateArrivals)
+  })
+})
+
+describe("getVisitLateDepartureMinutes", () => {
+  it("excludes visits without a recorded check-out", () => {
+    expect(getVisitLateDepartureMinutes(visit("x", "2026-08-10T08:00:00+03:00", { firstName: "A", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara" }))).toBeNull()
+  })
+
+  it("clamps an early check-out to zero and returns positive minutes after the planned end", () => {
+    const early = visit("early", "2026-08-10T08:00:00+03:00", { firstName: "A", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", plannedEnd: "2026-08-10T09:00:00+03:00", actualCheckOut: "2026-08-10T08:45:00+03:00" })
+    const late = visit("late", "2026-08-10T08:00:00+03:00", { firstName: "A", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", plannedEnd: "2026-08-10T09:00:00+03:00", actualCheckOut: "2026-08-10T09:15:00+03:00" })
+    expect(getVisitLateDepartureMinutes(early)).toBe(0)
+    expect(getVisitLateDepartureMinutes(late)).toBe(15)
+  })
+})
+
 describe("getVisitDurationMinutes", () => {
   it("returns null when either actual timestamp is missing", () => {
     expect(getVisitDurationMinutes(visit("x", "2026-08-10T08:00:00+03:00", { firstName: "A", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara" }))).toBeNull()
@@ -132,10 +167,11 @@ describe("calculateVisitsReportKpis", () => {
     expect(kpis.actuallyCheckedIn).toBe(2)
     expect(kpis.averageDurationMinutes).toBe(45)
     expect(kpis.lateArrivals).toBe(0)
+    expect(kpis.lateDepartures).toBe(2)
   })
 
   it("reports a null average duration and zero counts when there is no data", () => {
-    expect(calculateVisitsReportKpis([])).toEqual({ total: 0, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0 })
+    expect(calculateVisitsReportKpis([])).toEqual({ total: 0, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0, lateDepartures: 0 })
   })
 
   it("counts lateArrivals only for visits with an actual check-in that is after the planned start", () => {
@@ -145,6 +181,15 @@ describe("calculateVisitsReportKpis", () => {
       visit("c", "2026-08-10T08:00:00+03:00", { firstName: "C", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", status: "CHECKED_IN", actualCheckIn: "2026-08-10T07:50:00+03:00" }),
     ]
     expect(calculateVisitsReportKpis(kpiVisits).lateArrivals).toBe(1)
+  })
+
+  it("counts late departures only after the planned end and never for open visits", () => {
+    const kpiVisits = [
+      visit("open", "2026-08-10T08:00:00+03:00", { firstName: "A", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", status: "CHECKED_IN" }),
+      visit("early", "2026-08-10T08:00:00+03:00", { firstName: "B", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", plannedEnd: "2026-08-10T09:00:00+03:00", status: "CHECKED_OUT", actualCheckOut: "2026-08-10T08:50:00+03:00" }),
+      visit("late", "2026-08-10T08:00:00+03:00", { firstName: "C", companyId: "bplas", facilityId: "bplas-merkez", employeeId: "maya-kara", plannedEnd: "2026-08-10T09:00:00+03:00", status: "CHECKED_OUT", actualCheckOut: "2026-08-10T09:10:00+03:00" }),
+    ]
+    expect(calculateVisitsReportKpis(kpiVisits).lateDepartures).toBe(1)
   })
 })
 
@@ -212,129 +257,6 @@ describe("calculateSharedTrendYAxisMax", () => {
   })
 })
 
-describe("buildVisitsReportSummarySentences", () => {
-  const current = {
-    kpis: { total: 10, completed: 4, actuallyCheckedIn: 6, averageDurationMinutes: 75, lateArrivals: 2 },
-    trend: [
-      { date: "2026-08-10", label: "10 Ağu", PLANNED: 1, COMPLETED: 1, NO_SHOW: 0, CANCELLED: 0 },
-      { date: "2026-08-12", label: "12 Ağu", PLANNED: 2, COMPLETED: 3, NO_SHOW: 0, CANCELLED: 0 },
-    ],
-  }
-
-  it("reports a single sentence when there are no visits in the period", () => {
-    const empty = { kpis: { total: 0, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0 } }
-    expect(buildVisitsReportSummarySentences(empty, null)).toEqual(["Seçili dönemde kayıtlı ziyaret bulunmuyor."])
-  })
-
-  it("keeps the single-period summary to two concise sentences", () => {
-    const sentences = buildVisitsReportSummarySentences(current, null)
-    expect(sentences).toEqual([
-      "En yoğun gün 12 Ağu oldu.",
-      "Geç girişler gerçekleşen ziyaretlerin %33'sini oluşturdu.",
-    ])
-    expect(sentences.some((sentence) => sentence.includes("önceki döneme"))).toBe(false)
-  })
-
-  it("keeps comparison summary to three natural metric-focused sentences", () => {
-    const previous = {
-      kpis: { total: 5, completed: 2, actuallyCheckedIn: 3, averageDurationMinutes: 60, lateArrivals: 4 },
-    }
-    const sentences = buildVisitsReportSummarySentences(current, previous)
-    expect(sentences).toEqual([
-      "Toplam ziyaret sayısı 5 arttı; gerçekleşen ziyaret sayısı 3 arttı.",
-      "Ortalama ziyaret süresi 15 dakika uzadı.",
-      "2 daha az geç giriş kaydedildi.",
-    ])
-    expect(sentences).toHaveLength(3)
-  })
-
-  it("does not produce a misleading percentage when the previous period had zero of a metric", () => {
-    const previousZero = { kpis: { total: 0, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0 }, statusCounts: [], busiestDay: null }
-    const sentences = buildVisitsReportSummarySentences(current, previousZero)
-    expect(sentences.join(" ")).not.toContain("%")
-    expect(sentences.length).toBeLessThanOrEqual(3)
-  })
-
-  it("states when the average duration cannot be computed", () => {
-    const noCompleted = { kpis: { total: 3, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0 } }
-    const sentences = buildVisitsReportSummarySentences(noCompleted, null)
-    expect(sentences).toEqual([
-      "Ziyaret dağılımı için yeterli zaman verisi bulunmuyor.",
-      "Ziyaretler planlanan akış içinde ilerledi.",
-    ])
-  })
-
-  it("describes a shorter average duration as 'kısaldı'", () => {
-    const previousLonger = {
-      kpis: { total: 10, completed: 4, actuallyCheckedIn: 6, averageDurationMinutes: 100, lateArrivals: 2 },
-    }
-    const sentences = buildVisitsReportSummarySentences(current, previousLonger)
-    expect(sentences).toEqual(["Ortalama ziyaret süresi 25 dakika kısaldı."])
-  })
-
-  it("omits the duration comparison when the previous period has no computable average", () => {
-    const previousNoCompleted = {
-      kpis: { total: 5, completed: 0, actuallyCheckedIn: 0, averageDurationMinutes: null, lateArrivals: 0 },
-    }
-    const sentences = buildVisitsReportSummarySentences(current, previousNoCompleted)
-    expect(sentences.join(" ")).not.toContain("Ortalama ziyaret süresi")
-    expect(sentences.join(" ")).not.toContain("kısaldı")
-    expect(sentences.join(" ")).not.toContain("uzadı")
-  })
-
-  it("reports tied busiest hours and days instead of choosing the first maximum", () => {
-    const hourlyTrend = [
-      { date: "hour-06", label: "06:00", PLANNED: 2, COMPLETED: 0, NO_SHOW: 0, CANCELLED: 0 },
-      { date: "hour-07", label: "07:00", PLANNED: 1, COMPLETED: 0, NO_SHOW: 0, CANCELLED: 0 },
-      { date: "hour-08", label: "08:00", PLANNED: 0, COMPLETED: 2, NO_SHOW: 0, CANCELLED: 0 },
-    ]
-    const dailyTrend = [
-      { date: "2026-08-10", label: "10 Ağu", PLANNED: 0, COMPLETED: 3, NO_SHOW: 0, CANCELLED: 0 },
-      { date: "2026-08-11", label: "11 Ağu", PLANNED: 1, COMPLETED: 0, NO_SHOW: 0, CANCELLED: 0 },
-      { date: "2026-08-12", label: "12 Ağu", PLANNED: 1, COMPLETED: 2, NO_SHOW: 0, CANCELLED: 0 },
-    ]
-
-    expect(findVisitsReportBusiestPeriods(hourlyTrend)).toMatchObject({ kind: "hour", labels: ["06:00", "08:00"], tiedCount: 2 })
-    expect(findVisitsReportBusiestPeriods(dailyTrend)).toMatchObject({ kind: "day", labels: ["10 Ağu", "12 Ağu"], tiedCount: 2 })
-    expect(buildVisitsReportSummarySentences({ ...current, trend: hourlyTrend }, null)[0]).toBe("En yoğun saatler 06:00 ve 08:00 oldu.")
-    expect(buildVisitsReportSummarySentences({ ...current, trend: dailyTrend }, null)[0]).toBe("En yoğun günler 10 Ağu ve 12 Ağu oldu.")
-  })
-
-  it("summarizes a large busiest-period tie without listing every label", () => {
-    const tiedTrend = ["06:00", "07:00", "08:00", "09:00"].map((label, index) => ({
-      date: `hour-${index}`,
-      label,
-      PLANNED: 2,
-      COMPLETED: 0,
-      NO_SHOW: 0,
-      CANCELLED: 0,
-    }))
-
-    expect(buildVisitsReportSummarySentences({ ...current, trend: tiedTrend }, null)[0]).toBe("4 farklı saat aynı yoğunluğa ulaştı.")
-
-    const tiedDailyTrend = ["10 Ağu", "11 Ağu", "12 Ağu", "13 Ağu"].map((label, index) => ({
-      date: `day-${index}`,
-      label,
-      PLANNED: 2,
-      COMPLETED: 0,
-      NO_SHOW: 0,
-      CANCELLED: 0,
-    }))
-
-    expect(buildVisitsReportSummarySentences({ ...current, trend: tiedDailyTrend }, null)[0]).toBe(
-      "4 farklı gün aynı en yüksek ziyaret sayısına ulaştı.",
-    )
-  })
-
-  it("uses checked-in visits as the late-arrival denominator and handles zero safely", () => {
-    expect(calculateVisitsReportLateArrivalRate({ ...current.kpis, actuallyCheckedIn: 8, lateArrivals: 4 })).toBe(50)
-    expect(calculateVisitsReportLateArrivalRate({ ...current.kpis, actuallyCheckedIn: 0, lateArrivals: 0 })).toBeNull()
-
-    const noCheckedIn = { ...current, kpis: { ...current.kpis, actuallyCheckedIn: 0, lateArrivals: 0 } }
-    expect(buildVisitsReportSummarySentences(noCheckedIn, null).join(" ")).not.toContain("Geç girişler gerçekleşen ziyaretlerin")
-  })
-})
-
 describe("visits trend chart sizing", () => {
   it("returns evenly spaced deterministic Y ticks for a shared comparison axis", () => {
     expect(calculateVisitsTrendYAxis(10)).toEqual({ max: 10, ticks: [0, 2, 4, 6, 8, 10] })
@@ -353,6 +275,16 @@ describe("formatVisitsReportDelta", () => {
     expect(formatVisitsReportDelta(5, 0)).toEqual({ difference: 5, label: "+5" })
     expect(formatVisitsReportDelta(12, 10)).toEqual({ difference: 2, label: "+2" })
     expect(formatVisitsReportDelta(8, 10)).toEqual({ difference: -2, label: "−2" })
+  })
+})
+
+describe("getVisitsMetricDeltaTone", () => {
+  it("treats increases by metric meaning instead of coloring every increase positively", () => {
+    expect(getVisitsMetricDeltaTone(2, "increase")).toBe("positive")
+    expect(getVisitsMetricDeltaTone(-2, "increase")).toBe("negative")
+    expect(getVisitsMetricDeltaTone(2, "decrease")).toBe("negative")
+    expect(getVisitsMetricDeltaTone(-2, "decrease")).toBe("positive")
+    expect(getVisitsMetricDeltaTone(0, "decrease")).toBe("neutral")
   })
 })
 
@@ -429,6 +361,7 @@ function visit(id: string, plannedStart: string, overrides: {
   employeeId: string
   status?: Visit["status"]
   invitationStatus?: Visit["invitationStatus"]
+  plannedEnd?: string
   actualCheckIn?: string
   actualCheckOut?: string
 }): Visit {
@@ -450,7 +383,7 @@ function visit(id: string, plannedStart: string, overrides: {
     facilityId: facility.id,
     facilityName: facility.name,
     plannedStart,
-    plannedEnd: plannedStart,
+    plannedEnd: overrides.plannedEnd ?? plannedStart,
     status: overrides.status ?? "PLANNED",
     invitationStatus: overrides.invitationStatus ?? "SENT",
     hasAdditionalRequirements: false,
@@ -460,3 +393,84 @@ function visit(id: string, plannedStart: string, overrides: {
     updatedAt: plannedStart,
   }
 }
+describe("visits trend series and axes", () => {
+  const day = (date: string, planned: number, completed: number, noShow = 0, cancelled = 0) => ({
+    date,
+    label: date,
+    PLANNED: planned,
+    COMPLETED: completed,
+    NO_SHOW: noShow,
+    CANCELLED: cancelled,
+  })
+  // A finished 8, a finished 12 and a still-running today at 33, mostly still PLANNED.
+  const runningPeriod = [day("2026-09-05", 0, 8), day("2026-09-06", 1, 11), day("2026-09-07", 30, 3)]
+
+  it("marks only the trailing bucket as ongoing and keeps it out of the completed maximum", () => {
+    const series = buildVisitsTrendSeries(runningPeriod, "2026-09-07")
+    expect(series.ongoingIndex).toBe(2)
+    expect(series.points[2].TOTAL).toBe(33)
+    expect(series.completedMax).toBe(12)
+    expect(series.points.map((point) => point.TREND)).toEqual([8, 12, null])
+    expect(series.points.map((point) => point.isOngoing)).toEqual([false, false, true])
+  })
+
+  it("treats every bucket as complete when the range stops before today", () => {
+    const series = buildVisitsTrendSeries([day("2026-09-01", 0, 4), day("2026-09-02", 0, 6)], "2026-09-07")
+    expect(series.ongoingIndex).toBe(-1)
+    expect(series.completedMax).toBe(6)
+    expect(series.points.map((point) => point.TREND)).toEqual([4, 6])
+  })
+
+  it("falls back to the ongoing bucket when nothing in the range has finished yet", () => {
+    const series = buildVisitsTrendSeries([day("2026-09-07", 20, 1)], "2026-09-07")
+    expect(series.ongoingIndex).toBe(0)
+    expect(series.completedMax).toBe(21)
+  })
+
+  it("keeps the today tooltip note on every bucket of an hourly range but runs only the last one", () => {
+    const hourly = [{ ...day("hour-09", 0, 4), label: "09:00" }, { ...day("hour-10", 2, 1), label: "10:00" }]
+    const series = buildVisitsTrendSeries(hourly, "2026-09-07")
+    expect(series.points.map((point) => point.isToday)).toEqual([true, true])
+    expect(series.ongoingIndex).toBe(1)
+  })
+
+  it("derives the ceiling from the completed buckets and ignores a far larger ongoing day", () => {
+    const withToday = calculateVisitsTrendAxes(buildVisitsTrendSeries(runningPeriod, "2026-09-07"))
+    const withoutToday = calculateVisitsTrendAxes(buildVisitsTrendSeries(runningPeriod.slice(0, 2), "2026-09-07"))
+    expect(withToday.total.max).toBe(withoutToday.total.max)
+    expect(withToday.total.max).toBe(15)
+    expect(withToday.total.max).toBeLessThan(33)
+  })
+
+  it("leaves readable headroom above the tallest completed bucket instead of a fixed ceiling", () => {
+    expect(calculateVisitsTrendAxes(buildVisitsTrendSeries([day("2026-09-06", 0, 12)])).total.max).toBe(15)
+    expect(calculateVisitsTrendAxes(buildVisitsTrendSeries([day("2026-09-06", 0, 4)])).total.max).toBe(5)
+    expect(calculateVisitsTrendAxes(buildVisitsTrendSeries([day("2026-09-06", 0, 18)])).total.max).toBe(20)
+    expect(calculateVisitsTrendAxes(buildVisitsTrendSeries([])).total.max).toBe(5)
+  })
+
+  it("shares one ceiling across both comparison periods", () => {
+    const current = buildVisitsTrendSeries([day("2026-09-06", 0, 4)])
+    const previous = buildVisitsTrendSeries([day("2026-08-06", 0, 18)])
+    expect(calculateVisitsTrendAxes(current, previous).total.max).toBe(calculateVisitsTrendAxes(previous).total.max)
+    expect(calculateVisitsTrendAxes(current, previous).total.max).toBe(20)
+  })
+
+  it("builds only the total-scale axis, with no separate issue band", () => {
+    const axes = calculateVisitsTrendAxes(buildVisitsTrendSeries([day("2026-09-06", 0, 12)]))
+    expect(axes.total.max).toBe(15)
+    expect("issue" in axes).toBe(false)
+    expect("ISSUE" in buildVisitsTrendSeries([day("2026-09-06", 0, 12)]).points[0]).toBe(false)
+  })
+
+  it("draws the ongoing bucket as a two-point segment clamped inside the plot area", () => {
+    const series = buildVisitsTrendSeries(runningPeriod, "2026-09-07")
+    const axes = calculateVisitsTrendAxes(series)
+    expect(withVisitsTrendOngoingSegment(series, axes.total.max).map((point) => point.ONGOING)).toEqual([null, 12, 15])
+  })
+
+  it("adds no segment when the range has no ongoing bucket", () => {
+    const series = buildVisitsTrendSeries([day("2026-09-01", 0, 4), day("2026-09-02", 0, 6)], "2026-09-07")
+    expect(withVisitsTrendOngoingSegment(series, 10).map((point) => point.ONGOING)).toEqual([null, null])
+  })
+})

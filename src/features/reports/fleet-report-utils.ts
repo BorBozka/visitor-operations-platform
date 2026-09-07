@@ -15,22 +15,20 @@ export const FLEET_REPORT_PAGE_SIZE = 8
 export const MAX_FLEET_LOAD_RESOURCES = 10
 export const FLEET_CATEGORY_AXIS_WIDTH = 164
 
-export const FLEET_CONCENTRATION_THRESHOLDS = {
-  dominant: 0.55,
-  moderate: 0.25,
-} as const
-
 const NICE_DURATION_STEPS = [30, 60, 120, 180, 240, 360, 480, 720, 1_440] as const
 
 export type FleetReportDimension = "vehicles" | "drivers"
 export type FleetReportView = "analysis" | "records"
 export type FleetReportSortField = "date" | "purpose" | "vehicle" | "driver" | "planned" | "status"
+export const fleetReportRecordsStatusFilters = ["all", "active", "cancelled"] as const
+export type FleetReportRecordsStatusFilter = (typeof fleetReportRecordsStatusFilters)[number]
 
 export interface FleetReportWorkspaceState {
   view: FleetReportView
   dimension: FleetReportDimension
   page: number
   search: string
+  status: FleetReportRecordsStatusFilter
   sort: SingleSortState<FleetReportSortField>
 }
 
@@ -41,6 +39,9 @@ export interface FleetReportMetrics {
   usedVehicleCount: number
   usedDriverCount: number
 }
+
+export type FleetMetricFavorableDirection = "increase" | "decrease"
+export type FleetMetricDeltaTone = "positive" | "negative" | "neutral"
 
 export interface FleetLoadResource {
   resourceId: string
@@ -116,6 +117,11 @@ export function searchFleetReportRecords(assignments: PlannedTransportAssignment
   return assignments.filter((assignment) => matchesReportSearch(search, [assignment.vehicleName, assignment.vehicleLicensePlate, assignment.driverName, assignment.purpose, getRelatedLabel?.(assignment)]))
 }
 
+export function filterFleetReportRecordsByStatus(assignments: PlannedTransportAssignment[], status: FleetReportRecordsStatusFilter): PlannedTransportAssignment[] {
+  if (status === "all") return assignments
+  return assignments.filter((assignment) => status === "active" ? assignment.status === "ACTIVE" : assignment.status === "CANCELLED")
+}
+
 export function sortFleetReportRecords(assignments: PlannedTransportAssignment[], sort: SingleSortState<FleetReportSortField>) {
   return sortReportRecords(assignments, sort, (assignment, field) => {
     if (field === "date" || field === "planned") return new Date(assignment.plannedStart).getTime()
@@ -130,10 +136,10 @@ export function sortFleetReportRecords(assignments: PlannedTransportAssignment[]
 // planned-load duration and resource counts are different on purpose: a cancelled assignment is
 // historical report evidence, but it must not look like active load on a vehicle or driver.
 export function calculateFleetReportMetrics(assignments: PlannedTransportAssignment[]): FleetReportMetrics {
-  const activeAssignments = assignments.filter((assignment) => assignment.status !== "CANCELLED")
+  const activeAssignments = filterFleetReportRecordsByStatus(assignments, "active")
   return {
     totalAssignments: assignments.length,
-    cancelledAssignments: assignments.length - activeAssignments.length,
+    cancelledAssignments: filterFleetReportRecordsByStatus(assignments, "cancelled").length,
     plannedLoadMinutes: activeAssignments.reduce((sum, assignment) => sum + getAssignmentDurationMinutes(assignment), 0),
     usedVehicleCount: new Set(activeAssignments.map((assignment) => assignment.vehicleResourceId)).size,
     usedDriverCount: new Set(activeAssignments.map((assignment) => assignment.driverResourceId)).size,
@@ -220,6 +226,13 @@ function formatDurationDelta(current: number, previous: number) {
   return delta === 0 ? "değişmedi" : `${delta > 0 ? "+" : "-"}${formatDurationMinutes(Math.abs(delta))}`
 }
 
+export function getFleetMetricDeltaTone(difference: number, favorableDirection: FleetMetricFavorableDirection): FleetMetricDeltaTone {
+  if (difference === 0) return "neutral"
+  return (favorableDirection === "increase" && difference > 0) || (favorableDirection === "decrease" && difference < 0)
+    ? "positive"
+    : "negative"
+}
+
 export function buildFleetMetadata(current: FleetReportMetrics, previous: FleetReportMetrics | null): string {
   const values = [
     `${current.totalAssignments} görev`,
@@ -239,45 +252,6 @@ export function buildFleetMetadata(current: FleetReportMetrics, previous: FleetR
   ].join(" · ")
 }
 
-export function buildFleetInsight({ current, dimension, currentResources }: {
-  current: FleetReportMetrics
-  previous: FleetReportMetrics | null
-  dimension: FleetReportDimension
-  currentResources: FleetLoadResource[]
-  previousResources?: FleetLoadResource[]
-}): string {
-  const dimensionLabel = dimension === "vehicles" ? "araç" : "şoför"
-  const pluralDimensionLabel = dimension === "vehicles" ? "araçlar" : "şoförler"
-  if (current.totalAssignments === 0) return "Seçili dönemde kayıtlı araç / şoför görevi bulunmuyor."
-  if (current.plannedLoadMinutes === 0) {
-    return current.cancelledAssignments === current.totalAssignments
-      ? "Seçili dönemde yalnızca iptal edilmiş görevler bulunuyor."
-      : "Seçili dönemde aktif görevler için planlanan süre bulunmuyor."
-  }
-
-  const busiest = currentResources[0]
-  if (!busiest) return "Seçili dönemde aktif planlama yükü bulunmuyor."
-
-  const concentration = busiest.plannedMinutes / current.plannedLoadMinutes
-  const secondBusiest = currentResources[1]
-  const relativelyEvenLeaders = secondBusiest !== undefined && busiest.plannedMinutes <= secondBusiest.plannedMinutes * 1.15
-  let insight: string
-
-  if (currentResources.length === 1) {
-    insight = `Planlama yükü yalnızca ${busiest.resourceName} üzerinde bulunuyor.`
-  } else if (!relativelyEvenLeaders && concentration >= FLEET_CONCENTRATION_THRESHOLDS.dominant) {
-    insight = `Planlama yükü ${busiest.resourceName} üzerinde belirgin biçimde yoğunlaşıyor.`
-  } else if (!relativelyEvenLeaders && concentration >= FLEET_CONCENTRATION_THRESHOLDS.moderate) {
-    insight = `${busiest.resourceName} en yüksek planlama yükünü taşıyor ancak yük diğer ${dimensionLabel}lara da dağılıyor.`
-  } else {
-    insight = `Planlama yükü ${pluralDimensionLabel} arasında görece dengeli dağılıyor.`
-  }
-
-  const cancellationRate = current.cancelledAssignments / current.totalAssignments
-  const meaningfulCancellation = current.cancelledAssignments >= 3 && cancellationRate >= 0.15
-  return meaningfulCancellation ? `${insight} ${current.cancelledAssignments} görev iptal edildi.` : insight
-}
-
 export function isFleetRecordActivationKey(key: string) {
   return key === "Enter" || key === " "
 }
@@ -287,17 +261,19 @@ export function parseFleetReportWorkspace(searchParams: URLSearchParams): FleetR
   const rawDimension = searchParams.get("fleetDimension")
   const rawPage = Number(searchParams.get("fleetPage"))
   const rawSort = searchParams.get("fleetSort")
+  const rawStatus = searchParams.get("fleetStatus")
   const validSort: FleetReportSortField | null = ["date", "purpose", "vehicle", "driver", "planned", "status"].includes(rawSort ?? "") ? rawSort as FleetReportSortField : null
   return {
     view: rawView === "records" ? "records" : "analysis",
     dimension: rawDimension === "drivers" ? "drivers" : "vehicles",
     page: Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1,
     search: searchParams.get("fleetSearch")?.trim() ?? "",
+    status: fleetReportRecordsStatusFilters.includes(rawStatus as FleetReportRecordsStatusFilter) ? rawStatus as FleetReportRecordsStatusFilter : "all",
     sort: validSort ? { field: validSort, direction: searchParams.get("fleetDir") === "desc" ? "desc" : "asc" } : null,
   }
 }
 
-export function setFleetReportWorkspace(current: URLSearchParams, nextState: Partial<Pick<FleetReportWorkspaceState, "view" | "dimension" | "search" | "sort">>) {
+export function setFleetReportWorkspace(current: URLSearchParams, nextState: Partial<Pick<FleetReportWorkspaceState, "view" | "dimension" | "search" | "status" | "sort">>) {
   const next = new URLSearchParams(current)
   if (nextState.view) {
     if (nextState.view === "analysis") next.delete("fleetView")
@@ -308,6 +284,7 @@ export function setFleetReportWorkspace(current: URLSearchParams, nextState: Par
     else next.set("fleetDimension", nextState.dimension)
   }
   if (nextState.search !== undefined) { if (nextState.search.trim()) next.set("fleetSearch", nextState.search.trim()); else next.delete("fleetSearch") }
+  if (nextState.status !== undefined) { if (nextState.status === "all") next.delete("fleetStatus"); else next.set("fleetStatus", nextState.status) }
   if (nextState.sort !== undefined) { if (nextState.sort) { next.set("fleetSort", nextState.sort.field); next.set("fleetDir", nextState.sort.direction) } else { next.delete("fleetSort"); next.delete("fleetDir") } }
   next.delete("fleetPage")
   return next

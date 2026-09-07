@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest"
 import type { GoodsMovement } from "@/domain/goods-movements"
 import type { ReportsScopeFilters } from "@/features/reports/reports-filters"
 import {
-  buildGoodsInsight,
   calculateGoodsMovementTrend,
   calculateGoodsReportKpis,
+  filterGoodsReportRecordsByStatus,
+  calculateGoodsTrendAxes,
   calculateSharedGoodsTrendYAxis,
+  buildGoodsMovementTrendSeries,
   formatGoodsReportDelta,
   filterGoodsMovementsForReport,
   getGoodsReportPageCount,
@@ -18,6 +20,7 @@ import {
   setGoodsReportWorkspace,
   searchGoodsReportRecords,
   sortGoodsReportRecords,
+  withGoodsMovementTrendOngoingSegment,
 } from "@/features/reports/goods-report-utils"
 
 const baseFilters: ReportsScopeFilters = { startDate: "", endDate: "", companyId: "all", facilityId: "all" }
@@ -48,17 +51,17 @@ describe("filterGoodsMovementsForReport", () => {
 })
 
 describe("calculateGoodsReportKpis", () => {
-  it("computes totals, inbound/outbound counts and the late rate", () => {
+  it("computes totals, inbound/outbound counts and the late count", () => {
     const lateMovement = movement("late", "INBOUND", pastDate, { companyId: "bplas", facilityId: "bplas-merkez", plannedTime: "08:00" })
     const kpis = calculateGoodsReportKpis([...movements, lateMovement])
     expect(kpis.total).toBe(4)
     expect(kpis.inbound).toBe(3)
     expect(kpis.outbound).toBe(1)
-    expect(kpis.lateRate).toBe(25)
+    expect(kpis.lateCount).toBe(1)
   })
 
-  it("reports zero totals and rate when there is no data", () => {
-    expect(calculateGoodsReportKpis([])).toEqual({ total: 0, inbound: 0, outbound: 0, lateRate: 0 })
+  it("reports zero totals and late count when there is no data", () => {
+    expect(calculateGoodsReportKpis([])).toEqual({ total: 0, inbound: 0, outbound: 0, lateCount: 0 })
   })
 })
 
@@ -112,24 +115,52 @@ describe("goods movement trend analysis", () => {
   })
 
   it("calculates an honest shared comparison scale", () => {
-    const scale = calculateSharedGoodsTrendYAxis([{ date: "a", label: "A", INBOUND: 1, OUTBOUND: 2 }], [{ date: "b", label: "B", INBOUND: 5, OUTBOUND: 2 }])
-    expect(scale.max).toBeGreaterThanOrEqual(7)
-    expect(scale.ticks.at(-1)).toBe(scale.max)
+    const scale = calculateSharedGoodsTrendYAxis([{ date: "2026-08-10", label: "10 Ağu", INBOUND: 1, OUTBOUND: 2 }], [{ date: "2026-08-03", label: "3 Ağu", INBOUND: 5, OUTBOUND: 2 }])
+    expect(scale.total.max).toBeGreaterThanOrEqual(7)
+    expect(scale.total.ticks.at(-1)).toBe(scale.total.max)
+  })
+
+  it("combines status with the existing date, scope and text filters", () => {
+    const scoped = filterGoodsMovementsForReport([
+      movement("late-in", "INBOUND", "2026-08-10", { companyId: "bplas", facilityId: "bplas-merkez", plannedTime: "08:00" }),
+      movement("other-scope", "INBOUND", "2026-08-10", { companyId: "other", facilityId: "other-facility", plannedTime: "08:00" }),
+      movement("outbound", "OUTBOUND", "2026-08-10", { companyId: "bplas", facilityId: "bplas-merkez", plannedTime: "08:00" }),
+    ], { ...baseFilters, startDate: "2026-08-10", endDate: "2026-08-10", companyId: "bplas", facilityId: "bplas-merkez" })
+    const late = filterGoodsReportRecordsByStatus(scoped, "late", new Date("2026-08-11T12:00:00+03:00"))
+
+    expect(ids(searchGoodsReportRecords(late, "test tedarikçi"))).toEqual(["late-in", "outbound"])
+    expect(calculateGoodsReportKpis(scoped, new Date("2026-08-11T12:00:00+03:00")).lateCount).toBe(late.length)
+  })
+
+  it("keeps inbound and outbound record filters mutually exclusive", () => {
+    expect(ids(filterGoodsReportRecordsByStatus(trendMovements, "inbound"))).toEqual(["in-1", "in-2"])
+    expect(ids(filterGoodsReportRecordsByStatus(trendMovements, "outbound"))).toEqual(["out-1"])
+  })
+
+  it("excludes an ongoing high-volume day from the axis ceiling", () => {
+    const completedOnly = [{ date: "2026-09-06", label: "6 Eyl", INBOUND: 2, OUTBOUND: 2 }]
+    const currentPeriod = [...completedOnly, { date: "2026-09-07", label: "7 Eyl", INBOUND: 14, OUTBOUND: 11 }]
+    const currentSeries = buildGoodsMovementTrendSeries(currentPeriod, "2026-09-07")
+
+    expect(calculateGoodsTrendAxes(currentSeries).total.max).toBe(calculateGoodsTrendAxes(buildGoodsMovementTrendSeries(completedOnly)).total.max)
+    expect(withGoodsMovementTrendOngoingSegment(currentSeries, calculateGoodsTrendAxes(currentSeries).total.max).map((point) => point.ONGOING)).toEqual([4, 5])
   })
 })
 
 describe("goods workspace and summary helpers", () => {
   it("keeps the goods workspace isolated in its own URL keys", () => {
     const state = parseGoodsReportWorkspace(new URLSearchParams("view=records&page=3&goodsView=records&goodsPage=2"))
-    expect(state).toEqual({ view: "records", page: 2, search: "", sort: null })
+    expect(state).toEqual({ view: "records", page: 2, search: "", status: "all", sort: null })
     const recordsSearch = setGoodsReportWorkspace(new URLSearchParams("view=records&page=3"), { view: "records" })
     expect(recordsSearch.toString()).toBe("view=records&page=3&goodsView=records")
     expect(setGoodsReportPage(recordsSearch, 4).get("goodsPage")).toBe("4")
+    expect(parseGoodsReportWorkspace(new URLSearchParams("goodsStatus=outbound")).status).toBe("outbound")
+    expect(setGoodsReportWorkspace(new URLSearchParams("goodsPage=2&goodsSearch=Kalem"), { status: "late" }).toString()).toBe("goodsSearch=Kalem&goodsStatus=late")
+    expect(setGoodsReportWorkspace(new URLSearchParams("goodsStatus=late"), { status: "all" }).toString()).toBe("")
   })
 
-  it("formats deltas and produces deterministic insights", () => {
+  it("formats absolute count deltas", () => {
     expect(formatGoodsReportDelta(12, 8)).toEqual({ difference: 4, label: "+4" })
-    expect(buildGoodsInsight({ kpis: { total: 5, inbound: 3, outbound: 2, lateRate: 20 }, trend: [{ date: "2026-08-10", label: "10 Ağu", INBOUND: 3, OUTBOUND: 2 }] }, { total: 3, inbound: 1, outbound: 2, lateRate: 0 })).toContain("En yoğun gün 10 Ağu oldu.")
   })
 
   it("accepts Enter and Space for record rows", () => {

@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
 const tabSource = readFileSync(resolve(process.cwd(), "src/features/reports/GoodsReportTab.tsx"), "utf8")
+const chartSource = readFileSync(resolve(process.cwd(), "src/features/reports/GoodsMovementTrendChart.tsx"), "utf8")
 const dialogSource = readFileSync(resolve(process.cwd(), "src/features/reports/GoodsMovementDetailDialog.tsx"), "utf8")
 const pageSource = readFileSync(resolve(process.cwd(), "src/features/reports/ReportsPage.tsx"), "utf8")
 
@@ -17,11 +18,48 @@ describe("Goods report workspace UI contract", () => {
     expect(tabSource).toContain('className="flex h-full min-h-0 flex-col overflow-hidden')
   })
 
-  it("uses stacked inbound/outbound analysis rather than KPI cards", () => {
+  it("uses the balanced metric strip rather than KPI cards", () => {
     expect(tabSource).toContain("<GoodsMovementTrendChart")
-    expect(tabSource).toContain("buildGoodsMetadata")
-    expect(tabSource).toContain("buildGoodsInsight")
+    expect(tabSource).toContain('aria-label="Mal hareketi analiz metrikleri"')
+    expect(tabSource).toContain("<GoodsAnalysisMetric")
+    expect(tabSource).toContain('className="min-w-0 flex-1"')
+    expect(tabSource).not.toContain("buildGoodsInsight")
+    expect(tabSource).not.toContain("buildGoodsMetadata")
     expect(tabSource).not.toContain("ReportKpiCard")
+  })
+
+  it("connects every goods KPI to its shareable records status without recreating late logic", () => {
+    for (const status of ["all", "inbound", "outbound", "late"]) expect(tabSource).toContain(`openRecordsForMetric("${status}")`)
+    expect(tabSource).toContain("filterGoodsReportRecordsByStatus(reportMovements, workspace.status)")
+    expect(tabSource).toContain("lateCount")
+    expect(tabSource).toContain("const lateDelta = hasComparisonData")
+    expect(tabSource).toContain('label="Geciken" delta={lateDelta} favorableDirection="decrease"')
+    expect(tabSource).not.toContain("lateRate")
+    expect(pageSource).toContain("<GoodsRecordsStatusFilter value={goodsWorkspace.status}")
+    expect(pageSource).toContain('<option value="inbound">Gelen</option>')
+    expect(pageSource).toContain('<option value="outbound">Giden</option>')
+    expect(pageSource).toContain('<option value="late">Geciken</option>')
+  })
+
+  it("uses the visits-style total line, completed-day axis and tooltip breakdown", () => {
+    expect(chartSource).toContain('<Line yAxisId="total" type="linear" dataKey="TREND"')
+    expect(chartSource).toContain('dataKey="ONGOING"')
+    expect(chartSource).toContain('strokeDasharray={ONGOING_DASH}')
+    expect(chartSource).toContain("buildGoodsMovementTrendSeries(points, todayDate)")
+    expect(chartSource).toContain("calculateGoodsTrendAxes(series)")
+    expect(chartSource).toContain("withGoodsMovementTrendOngoingSegment(series, chartAxes.total.max)")
+    expect(chartSource).not.toContain("stackId=")
+    expect(chartSource).toContain("visibleDirections")
+    expect(chartSource).toContain("point[direction] > 0")
+  })
+
+  it("merges only the goods analysis filter and chart cards, with a 2:1 comparison layout", () => {
+    expect(pageSource).toContain('|| queryState.tab === "goods" && goodsWorkspace.view === "analysis"')
+    expect(tabSource).toContain('className="flex h-full min-h-0 flex-col overflow-hidden bg-card px-3 py-2"')
+    expect(tabSource).not.toContain('Mal Hareketi Analizi</h2>')
+    expect(tabSource).toContain("TrendPanel primary points={trend} todayDate={todayDate} axes={sharedAxis}")
+    expect(tabSource).toContain('primary ? "flex-[2]" : "flex-1"')
+    expect(tabSource).toContain('`${comparisonLabel} · ${formatGoodsRangeLabel(comparisonFilters!)}`')
   })
 
   it("opens the selected record with pointer and keyboard interactions", () => {

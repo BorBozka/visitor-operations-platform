@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest"
 import {
   getDefaultReportsRange,
   getComparisonPeriod,
+  getCustomComparisonPreview,
   getMaxEndDate,
   getPreviousPeriod,
   getQuickRangeOptions,
   matchesQuickRange,
   parseRecordsReportFilters,
   parseReportsQuery,
+  reportTabs,
   resetRecordsReportFilters,
   resetReportsFilters,
   setReportsComparison,
@@ -141,9 +143,30 @@ describe("parseReportsQuery", () => {
     expect(setVisitsReportRecordsWorkspace(next, { search: "", sort: null }).toString()).toBe("fleetPage=4")
   })
 
+  it("keeps the records status filter in its own shareable URL key and clears it for all records", () => {
+    expect(parseReportsQuery(new URLSearchParams("view=records&visitStatus=late-arrival"), mockVisitReferenceData, now).recordsStatus).toBe("late-arrival")
+    expect(parseReportsQuery(new URLSearchParams("visitStatus=unknown"), mockVisitReferenceData, now).recordsStatus).toBe("all")
+    const filtered = setVisitsReportRecordsWorkspace(new URLSearchParams("page=2&visitSearch=Ayşe"), { status: "completed" })
+    expect(filtered.toString()).toBe("visitSearch=Ay%C5%9Fe&visitStatus=completed")
+    expect(setVisitsReportRecordsWorkspace(filtered, { status: "all" }).toString()).toBe("visitSearch=Ay%C5%9Fe")
+  })
+
   it("rejects an incomplete custom comparison from the URL", () => {
     expect(parseReportsQuery(new URLSearchParams("comparison=custom"), mockVisitReferenceData, now)).toMatchObject({ comparison: "none", compareFrom: null, compareTo: null })
     expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19"), mockVisitReferenceData, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-08-17" })
+    expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19&compareTo=2025-07-31"), mockVisitReferenceData, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-07-31" })
+  })
+})
+
+describe("report tab strip", () => {
+  it("displays the tabs as Ziyaretler, then Mal Hareketi, then Araç / Şoför", () => {
+    expect([...reportTabs]).toEqual(["visits", "goods", "vehicle"])
+  })
+
+  it("keeps visits as the default tab and every tab deep link working after the reorder", () => {
+    expect(parseReportsQuery(new URLSearchParams(""), mockVisitReferenceData, now).tab).toBe("visits")
+    expect(parseReportsQuery(new URLSearchParams("tab=goods"), mockVisitReferenceData, now).tab).toBe("goods")
+    expect(parseReportsQuery(new URLSearchParams("tab=vehicle&comparison=previous"), mockVisitReferenceData, now)).toMatchObject({ tab: "vehicle", comparison: "previous" })
   })
 })
 
@@ -165,10 +188,12 @@ describe("records report scope filters", () => {
 describe("shared comparison periods", () => {
   const filters = { startDate: "2026-06-01", endDate: "2026-08-31" }
 
-  it("supports previous, previous-year and equal-length custom periods", () => {
+  it("supports previous, previous-year, equal-length custom and explicit custom periods", () => {
     expect(getComparisonPeriod(filters, "previous")).toEqual({ startDate: "2026-03-01", endDate: "2026-05-31" })
     expect(getComparisonPeriod(filters, "previous-year")).toEqual({ startDate: "2025-06-01", endDate: "2025-08-31" })
     expect(getComparisonPeriod(filters, "custom", "2025-06-01")).toEqual({ startDate: "2025-06-01", endDate: "2025-08-31" })
+    expect(getComparisonPeriod(filters, "custom", "2025-06-01", "2025-07-15")).toEqual({ startDate: "2025-06-01", endDate: "2025-07-15" })
+    expect(getComparisonPeriod(filters, "custom", "2025-06-01", "2025-05-31")).toBeNull()
   })
 
   it("handles leap-day ranges without producing an invalid date", () => {
@@ -177,13 +202,27 @@ describe("shared comparison periods", () => {
 
   it("cleans stale custom parameters when comparison changes", () => {
     expect(setReportsComparison(new URLSearchParams("comparison=custom&compareFrom=2025-06-01&compareTo=2025-08-31"), "previous").toString()).toBe("comparison=previous")
-    expect(setReportsCustomComparison(new URLSearchParams(""), filters, "2025-06-01").toString()).toBe("comparison=custom&compareFrom=2025-06-01&compareTo=2025-08-31")
+    expect(setReportsCustomComparison(new URLSearchParams(""), filters, "2025-06-01").toString()).toBe("comparison=custom&compareFrom=2025-06-01")
+    expect(setReportsCustomComparison(new URLSearchParams(""), filters, "2025-06-01", "2025-07-15").toString()).toBe("comparison=custom&compareFrom=2025-06-01&compareTo=2025-07-15")
   })
 
   it("does not commit an incomplete custom draft and preserves the previous comparison", () => {
     const previous = new URLSearchParams("comparison=previous")
     expect(setReportsCustomComparison(previous, filters, "").toString()).toBe("comparison=previous")
+    expect(setReportsCustomComparison(previous, filters, "2025-06-01", "2025-05-31").toString()).toBe("comparison=previous")
     expect(setReportsCustomComparison(new URLSearchParams("comparison=custom&compareFrom=2025-06-01&compareTo=2025-08-31"), filters, "").toString()).toBe("comparison=custom&compareFrom=2025-06-01&compareTo=2025-08-31")
+  })
+
+  it("builds no custom preview before a date is entered and flags only unequal period lengths", () => {
+    expect(getCustomComparisonPreview(filters, "", "")).toBeNull()
+    expect(getCustomComparisonPreview(filters, "2025-06-01", "2025-08-31")).toEqual({
+      period: { startDate: "2025-06-01", endDate: "2025-08-31" },
+      hasDifferentLength: false,
+    })
+    expect(getCustomComparisonPreview(filters, "2025-06-01", "2025-07-15")).toEqual({
+      period: { startDate: "2025-06-01", endDate: "2025-07-15" },
+      hasDifferentLength: true,
+    })
   })
 })
 

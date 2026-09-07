@@ -10,6 +10,8 @@ import type { SingleSortState } from "@/lib/sort"
 
 export const VISITS_REPORT_PAGE_SIZE = 8
 export type VisitsReportSortField = "date" | "visitor" | "company" | "host" | "planned" | "duration" | "status"
+export const visitsReportRecordsStatusFilters = ["all", "planned", "completed", "no-show", "cancelled", "late-arrival", "late-departure"] as const
+export type VisitsReportRecordsStatusFilter = (typeof visitsReportRecordsStatusFilters)[number]
 
 const VISITS_STATUS_SORT_ORDER: Record<VisitStatus, number> = { PLANNED: 0, CHECKED_IN: 1, CHECKED_OUT: 2, NO_SHOW: 3, CANCELLED: 4 }
 
@@ -59,6 +61,21 @@ export function getVisitDelayMinutes(visit: Visit): number | null {
   return Math.max(0, differenceInMinutes(new Date(visit.actualCheckIn), new Date(visit.plannedStart)))
 }
 
+export function filterVisitsReportRecordsByStatus(visits: Visit[], status: VisitsReportRecordsStatusFilter): Visit[] {
+  if (status === "all") return visits
+  if (status === "planned") return visits.filter((visit) => visit.status === "PLANNED")
+  if (status === "completed") return visits.filter((visit) => Boolean(visit.actualCheckIn))
+  if (status === "no-show") return visits.filter((visit) => visit.status === "NO_SHOW")
+  if (status === "cancelled") return visits.filter((visit) => visit.status === "CANCELLED")
+  if (status === "late-arrival") return visits.filter((visit) => getVisitDelayMinutes(visit) !== null && getVisitDelayMinutes(visit)! > 0)
+  return visits.filter((visit) => getVisitLateDepartureMinutes(visit) !== null && getVisitLateDepartureMinutes(visit)! > 0)
+}
+
+export function getVisitLateDepartureMinutes(visit: Visit): number | null {
+  if (!visit.actualCheckOut) return null
+  return Math.max(0, differenceInMinutes(new Date(visit.actualCheckOut), new Date(visit.plannedEnd)))
+}
+
 export function getVisitDurationMinutes(visit: Visit): number | null {
   if (!visit.actualCheckIn || !visit.actualCheckOut) return null
   return differenceInMinutes(new Date(visit.actualCheckOut), new Date(visit.actualCheckIn))
@@ -70,6 +87,7 @@ export interface VisitsReportKpis {
   actuallyCheckedIn: number
   averageDurationMinutes: number | null
   lateArrivals: number
+  lateDepartures: number
 }
 
 export function calculateVisitsReportKpis(visits: Visit[]): VisitsReportKpis {
@@ -77,6 +95,7 @@ export function calculateVisitsReportKpis(visits: Visit[]): VisitsReportKpis {
   const completed = visits.filter((visit) => visit.status === "CHECKED_OUT").length
   const actuallyCheckedIn = visits.filter((visit) => visit.actualCheckIn).length
   const lateArrivals = visits.filter((visit) => getVisitDelayMinutes(visit) !== null && getVisitDelayMinutes(visit)! > 0).length
+  const lateDepartures = visits.filter((visit) => getVisitLateDepartureMinutes(visit) !== null && getVisitLateDepartureMinutes(visit)! > 0).length
 
   const durations = visits
     .map((visit) => getVisitDurationMinutes(visit))
@@ -85,7 +104,7 @@ export function calculateVisitsReportKpis(visits: Visit[]): VisitsReportKpis {
     ? null
     : Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
 
-  return { total, completed, actuallyCheckedIn, averageDurationMinutes, lateArrivals }
+  return { total, completed, actuallyCheckedIn, averageDurationMinutes, lateArrivals, lateDepartures }
 }
 
 export function paginateReportVisits(visits: Visit[], page: number, pageSize = VISITS_REPORT_PAGE_SIZE) {
@@ -280,6 +299,90 @@ export function calculateVisitsTrendYAxis(rawMax: number): VisitsTrendYAxis {
   return { max, ticks: Array.from({ length: intervalCount + 1 }, (_, index) => index * step) }
 }
 
+export interface VisitsTrendChartPoint extends VisitsReportDailyTrendGroupedPoint {
+  TOTAL: number
+  TREND: number | null
+  ONGOING: number | null
+  isToday: boolean
+  isOngoing: boolean
+}
+
+export interface VisitsTrendSeries {
+  points: VisitsTrendChartPoint[]
+  completedMax: number
+  ongoingIndex: number
+}
+
+export interface VisitsTrendAxes {
+  total: VisitsTrendYAxis
+}
+
+// Headroom above the tallest completed bucket, so the trend line never runs along the top gridline.
+const VISITS_TREND_AXIS_HEADROOM = 1.1
+
+// A bucket counts as today when the selected granularity puts today inside it: every hourly
+// bucket belongs to today, a daily bucket matches the date outright, and a weekly bucket covers
+// today when the offset from its first day is still inside the bucket's own day count.
+export function isVisitsTrendTodayPoint(point: VisitsReportDailyTrendGroupedPoint, todayDate: string): boolean {
+  if (point.date.startsWith("hour-")) return true
+  if (point.date === todayDate) return true
+
+  const weeklyStart = /^week-\d+-(\d{4}-\d{2}-\d{2})$/.exec(point.date)?.[1]
+  if (!weeklyStart || !point.periodDayCount) return false
+  const offset = differenceInCalendarDays(parse(todayDate, "yyyy-MM-dd", new Date()), parse(weeklyStart, "yyyy-MM-dd", new Date()))
+  return offset >= 0 && offset < point.periodDayCount
+}
+
+// Only the trailing bucket can still be running, so only it is held out of the axis maths: an
+// unfinished day whose count is dominated by PLANNED records must not decide how tall a finished
+// day looks. Everything before it is complete and stays part of the scale.
+export function buildVisitsTrendSeries(points: VisitsReportDailyTrendGroupedPoint[], todayDate?: string): VisitsTrendSeries {
+  const lastIndex = points.length - 1
+  const ongoingIndex = todayDate !== undefined && lastIndex >= 0 && isVisitsTrendTodayPoint(points[lastIndex], todayDate) ? lastIndex : -1
+
+  const chartPoints = points.map((point, index): VisitsTrendChartPoint => {
+    const total = point.PLANNED + point.COMPLETED + point.NO_SHOW + point.CANCELLED
+    const isOngoing = index === ongoingIndex
+    return {
+      ...point,
+      TOTAL: total,
+      TREND: isOngoing ? null : total,
+      ONGOING: null,
+      isToday: todayDate !== undefined && isVisitsTrendTodayPoint(point, todayDate),
+      isOngoing,
+    }
+  })
+
+  // With nothing completed yet there is no undistorted reference to scale against, so the ongoing
+  // bucket is allowed to set the ceiling rather than being clamped against an arbitrary floor.
+  const scaleSource = chartPoints.some((point) => !point.isOngoing) ? chartPoints.filter((point) => !point.isOngoing) : chartPoints
+  return {
+    points: chartPoints,
+    completedMax: scaleSource.reduce((max, point) => Math.max(max, point.TOTAL), 0),
+    ongoingIndex,
+  }
+}
+
+// One axis for however many series are drawn together: passing both comparison periods here is
+// what makes the two stacked charts share a scale, so equal heights mean equal values.
+export function calculateVisitsTrendAxes(...series: VisitsTrendSeries[]): VisitsTrendAxes {
+  const completedMax = series.reduce((max, item) => Math.max(max, item.completedMax), 0)
+  return {
+    total: calculateVisitsTrendYAxis(completedMax * VISITS_TREND_AXIS_HEADROOM),
+  }
+}
+
+// The ongoing bucket is drawn as its own segment starting at the last completed bucket, which is
+// why both ends carry a value. Its height is clamped to the ceiling so a day that already runs
+// above the completed scale stays visible at the top of the plot instead of being clipped away
+// outside the axis; the tooltip keeps reporting the real counts.
+export function withVisitsTrendOngoingSegment(series: VisitsTrendSeries, axisMax: number): VisitsTrendChartPoint[] {
+  if (series.ongoingIndex < 0) return series.points
+  return series.points.map((point, index) => index === series.ongoingIndex || index === series.ongoingIndex - 1
+    ? { ...point, ONGOING: Math.min(point.TOTAL, axisMax) }
+    : point)
+}
+
 export interface VisitsTrendBarSizing {
   maxBarSize: number
   barCategoryGap: string
@@ -299,6 +402,9 @@ export interface VisitsReportDelta {
   label: string
 }
 
+export type VisitsMetricFavorableDirection = "increase" | "decrease"
+export type VisitsMetricDeltaTone = "positive" | "negative" | "neutral"
+
 // Comparison metadata is deliberately absolute and neutral; it does not imply good/bad
 // direction and does not duplicate the same change as a percentage.
 export function formatVisitsReportDelta(current: number, previous: number): VisitsReportDelta {
@@ -307,9 +413,10 @@ export function formatVisitsReportDelta(current: number, previous: number): Visi
   return { difference, label: absolute }
 }
 
-export interface VisitsReportPeriodSummaryInput {
-  kpis: VisitsReportKpis
-  trend?: VisitsReportDailyTrendGroupedPoint[]
+export function getVisitsMetricDeltaTone(difference: number, favorableDirection: VisitsMetricFavorableDirection): VisitsMetricDeltaTone {
+  if (difference === 0) return "neutral"
+  const isPositive = favorableDirection === "increase" ? difference > 0 : difference < 0
+  return isPositive ? "positive" : "negative"
 }
 
 function emptyStatusCounts(): Record<VisitStatus, number> {
@@ -383,124 +490,4 @@ export function calculateVisitsReportTrendWithStatus(visits: Visit[], filters: R
   if (granularity === "hourly") return calculateVisitsReportHourlyTrendWithStatus(visits)
   if (granularity === "weekly") return calculateVisitsReportWeeklyTrendWithStatus(visits, filters)
   return calculateVisitsReportDailyTrendWithStatus(visits, filters)
-}
-
-function describeMetricChange(label: string, current: number, previous: number): string | null {
-  const difference = current - previous
-  if (difference === 0) return null
-  return `${label} ${Math.abs(difference)} ${difference > 0 ? "arttı" : "azaldı"}`
-}
-
-function formatDurationForSentence(minutes: number): string {
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
-  if (hours === 0) return `${remainingMinutes} dakika`
-  if (remainingMinutes === 0) return `${hours} saat`
-  return `${hours} saat ${remainingMinutes} dakika`
-}
-
-function describeDurationChange(current: number | null, previous: number | null): string | null {
-  if (current === null || previous === null) return null
-  const difference = current - previous
-  if (difference === 0) return null
-  return `Ortalama ziyaret süresi ${formatDurationForSentence(Math.abs(difference))} ${difference > 0 ? "uzadı" : "kısaldı"}`
-}
-
-export type VisitsReportBusiestPeriodKind = "hour" | "day" | "period"
-
-export interface VisitsReportBusiestPeriods {
-  kind: VisitsReportBusiestPeriodKind
-  labels: string[]
-  tiedCount: number
-  maxCount: number
-}
-
-const MAX_LISTED_BUSY_PERIODS = 3
-
-function getTrendPointTotal(point: VisitsReportDailyTrendGroupedPoint): number {
-  return point.PLANNED + point.COMPLETED + point.NO_SHOW + point.CANCELLED
-}
-
-export function findVisitsReportBusiestPeriods(trend: VisitsReportDailyTrendGroupedPoint[]): VisitsReportBusiestPeriods | null {
-  const maxCount = trend.reduce((max, point) => Math.max(max, getTrendPointTotal(point)), 0)
-  if (maxCount === 0) return null
-
-  const tied = trend.filter((point) => getTrendPointTotal(point) === maxCount)
-  const firstLabel = tied[0]?.label ?? ""
-  const kind: VisitsReportBusiestPeriodKind = firstLabel.includes(":") ? "hour" : firstLabel.includes("–") ? "period" : "day"
-  return {
-    kind,
-    labels: tied.slice(0, MAX_LISTED_BUSY_PERIODS).map((point) => point.label),
-    tiedCount: tied.length,
-    maxCount,
-  }
-}
-
-function joinTurkishList(values: string[]): string {
-  if (values.length <= 1) return values[0] ?? ""
-  if (values.length === 2) return `${values[0]} ve ${values[1]}`
-  return `${values.slice(0, -1).join(", ")} ve ${values.at(-1)}`
-}
-
-function buildBusiestPeriodSentence(busiest: VisitsReportBusiestPeriods | null): string {
-  if (!busiest) return "Ziyaret dağılımı için yeterli zaman verisi bulunmuyor."
-
-  const singular = busiest.kind === "hour" ? "saat" : busiest.kind === "day" ? "gün" : "dönem"
-  const plural = busiest.kind === "hour" ? "saatler" : busiest.kind === "day" ? "günler" : "dönemler"
-  if (busiest.tiedCount > MAX_LISTED_BUSY_PERIODS) {
-    return busiest.kind === "hour"
-      ? `${busiest.tiedCount} farklı saat aynı yoğunluğa ulaştı.`
-      : `${busiest.tiedCount} farklı ${singular} aynı en yüksek ziyaret sayısına ulaştı.`
-  }
-  if (busiest.tiedCount === 1) return `En yoğun ${singular} ${busiest.labels[0]} oldu.`
-  return `En yoğun ${plural} ${joinTurkishList(busiest.labels)} oldu.`
-}
-
-export function calculateVisitsReportLateArrivalRate(kpis: VisitsReportKpis): number | null {
-  if (kpis.actuallyCheckedIn === 0) return null
-  return Math.round((kpis.lateArrivals / kpis.actuallyCheckedIn) * 100)
-}
-
-// Deterministic sentences built only from already-calculated period data — no external
-// AI/LLM call. `previous` is null when comparison is off or the period has no natural previous
-// range (open-ended filters); in that case comparison clauses are simply omitted.
-export function buildVisitsReportSummarySentences(current: VisitsReportPeriodSummaryInput, previous: VisitsReportPeriodSummaryInput | null): string[] {
-  if (current.kpis.total === 0) {
-    return ["Seçili dönemde kayıtlı ziyaret bulunmuyor."]
-  }
-
-  if (!previous) {
-    const trend = current.trend ?? []
-    const busiest = findVisitsReportBusiestPeriods(trend)
-    const noShowCount = trend.reduce((sum, point) => sum + point.NO_SHOW, 0)
-    const cancelledCount = trend.reduce((sum, point) => sum + point.CANCELLED, 0)
-    const lateArrivalRate = calculateVisitsReportLateArrivalRate(current.kpis)
-    const outcomeInsight = current.kpis.lateArrivals > 0 && lateArrivalRate !== null
-      ? `Geç girişler gerçekleşen ziyaretlerin %${lateArrivalRate}'sini oluşturdu.`
-      : noShowCount > 0
-        ? `Gerçekleşmeyen ziyaretler toplam ziyaretlerin %${Math.round((noShowCount / current.kpis.total) * 100)}'sini oluşturdu.`
-        : cancelledCount > 0
-          ? `İptal edilen ziyaretler toplam ziyaretlerin %${Math.round((cancelledCount / current.kpis.total) * 100)}'sini oluşturdu.`
-          : "Ziyaretler planlanan akış içinde ilerledi."
-    return [
-      buildBusiestPeriodSentence(busiest),
-      outcomeInsight,
-    ]
-  }
-
-  const totalChange = describeMetricChange("Toplam ziyaret sayısı", current.kpis.total, previous.kpis.total)
-  const completedChange = describeMetricChange("Gerçekleşen ziyaret sayısı", current.kpis.actuallyCheckedIn, previous.kpis.actuallyCheckedIn)
-  const durationChange = describeDurationChange(current.kpis.averageDurationMinutes, previous.kpis.averageDurationMinutes)
-  const lateDifference = current.kpis.lateArrivals - previous.kpis.lateArrivals
-  const lateChange = lateDifference === 0
-    ? null
-    : `${Math.abs(lateDifference)} daha ${lateDifference > 0 ? "fazla" : "az"} geç giriş kaydedildi`
-
-  const sentences: string[] = []
-  if (totalChange && completedChange) sentences.push(`${totalChange}; ${completedChange.toLocaleLowerCase("tr-TR")}.`)
-  else if (totalChange || completedChange) sentences.push(`${totalChange ?? completedChange}.`)
-  if (durationChange) sentences.push(`${durationChange}.`)
-  if (lateChange) sentences.push(`${lateChange}.`)
-
-  return sentences.length > 0 ? sentences.slice(0, 3) : ["Temel ziyaret göstergeleri önceki dönemle aynı kaldı."]
 }

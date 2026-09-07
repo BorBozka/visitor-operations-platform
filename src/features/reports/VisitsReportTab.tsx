@@ -16,13 +16,14 @@ import { formatDurationMinutes } from "@/features/reports/report-format"
 import { ReportPagination } from "@/features/reports/ReportPagination"
 import type { ReportsScopeFilters } from "@/features/reports/reports-filters"
 import {
-  buildVisitsReportSummarySentences,
-  calculateSharedTrendYAxisMax,
+  buildVisitsTrendSeries,
   calculateVisitsReportKpis,
   calculateVisitsReportTrendWithStatus,
-  calculateVisitsTrendYAxis,
+  calculateVisitsTrendAxes,
+  filterVisitsReportRecordsByStatus,
   filterVisitsForReport,
   formatVisitsReportDelta,
+  getVisitsMetricDeltaTone,
   getReportPageCount,
   getReportPageRange,
   getVisibleReportPageNumbers,
@@ -37,8 +38,9 @@ import {
   VISITS_REPORT_STATUS_COLORS,
   VISITS_REPORT_STATUS_LABELS,
   type VisitsReportDailyTrendGroupedPoint,
-  type VisitsReportPeriodSummaryInput,
+  type VisitsTrendAxes,
   type VisitsReportTrendGranularity,
+  type VisitsReportRecordsStatusFilter,
   type VisitsReportSortField,
 } from "@/features/reports/visits-report-utils"
 import { VisitsTrendChart, VisitsTrendLegend } from "@/features/reports/VisitsTrendChart"
@@ -58,8 +60,10 @@ interface VisitsReportTabProps {
   recordsPage: number
   onRecordsPageChange(page: number): void
   recordsSearch: string
+  recordsStatus: VisitsReportRecordsStatusFilter
   recordsSort: SingleSortState<VisitsReportSortField>
   onRecordsSortChange(sort: SingleSortState<VisitsReportSortField>): void
+  onMetricNavigate(status: VisitsReportRecordsStatusFilter): void
   comparisonEnabled?: boolean
   comparisonFilters?: ReportsScopeFilters | null
   comparisonLabel?: string
@@ -67,19 +71,20 @@ interface VisitsReportTabProps {
 }
 
 interface MetricDelta {
+  difference: number
   label: string
 }
 
 function countDelta(current: number, previous: number): MetricDelta {
   const delta = formatVisitsReportDelta(current, previous)
-  return { label: delta.difference === 0 ? "değişmedi" : delta.label }
+  return { difference: delta.difference, label: delta.difference === 0 ? "değişmedi" : delta.label }
 }
 
 function durationDelta(currentMinutes: number | null, previousMinutes: number | null): MetricDelta | null {
   if (currentMinutes === null || previousMinutes === null) return null
   const difference = currentMinutes - previousMinutes
-  if (difference === 0) return { label: "değişmedi" }
-  return { label: `${difference > 0 ? "+" : "−"}${formatDurationMinutes(Math.abs(difference))}` }
+  if (difference === 0) return { difference, label: "değişmedi" }
+  return { difference, label: `${difference > 0 ? "+" : "−"}${formatDurationMinutes(Math.abs(difference))}` }
 }
 
 function formatRangeLabel(filters: ReportsScopeFilters) {
@@ -89,13 +94,14 @@ function formatRangeLabel(filters: ReportsScopeFilters) {
   return `${formatTr(start, "d MMM yyyy")} – ${formatTr(end, "d MMM yyyy")}`
 }
 
-export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabProps>(function VisitsReportTab({ visits, filters, dateRangeInvalid, workspaceMode, selectedGranularity, recordsPage, onRecordsPageChange, recordsSearch, recordsSort, onRecordsSortChange, comparisonEnabled = false, comparisonFilters = null, comparisonLabel = "Önceki dönem", onExportAvailabilityChange }, ref) {
+export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabProps>(function VisitsReportTab({ visits, filters, dateRangeInvalid, workspaceMode, selectedGranularity, recordsPage, onRecordsPageChange, recordsSearch, recordsStatus, recordsSort, onRecordsSortChange, onMetricNavigate, comparisonEnabled = false, comparisonFilters = null, comparisonLabel = "Önceki dönem", onExportAvailabilityChange }, ref) {
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null)
   const analysisCardRef = useRef<HTMLElement | null>(null)
-  const isTodayRange = filters.startDate !== "" && filters.startDate === filters.endDate && filters.endDate === formatTr(new Date(), "yyyy-MM-dd")
+  const todayDate = formatTr(new Date(), "yyyy-MM-dd")
+  const isTodayRange = filters.startDate !== "" && filters.startDate === filters.endDate && filters.endDate === todayDate
   const trendGranularity: VisitsReportTrendGranularity = isTodayRange ? "hourly" : selectedGranularity
   const reportVisits = useMemo(() => filterVisitsForReport(visits, filters), [filters, visits])
-  const recordVisits = useMemo(() => sortVisitsReportRecords(searchVisitsReportRecords(reportVisits, recordsSearch), recordsSort), [recordsSearch, recordsSort, reportVisits])
+  const recordVisits = useMemo(() => sortVisitsReportRecords(searchVisitsReportRecords(filterVisitsReportRecordsByStatus(reportVisits, recordsStatus), recordsSearch), recordsSort), [recordsSearch, recordsSort, recordsStatus, reportVisits])
   const kpis = useMemo(() => calculateVisitsReportKpis(reportVisits), [reportVisits])
   const dailyTrendWithStatus = useMemo(() => calculateVisitsReportTrendWithStatus(reportVisits, filters, trendGranularity), [reportVisits, filters, trendGranularity])
   const dailyTrendGrouped = useMemo(() => groupVisitsReportDailyTrendByOutcome(dailyTrendWithStatus), [dailyTrendWithStatus])
@@ -104,29 +110,26 @@ export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabPro
 
   const previousFilters = comparisonEnabled ? comparisonFilters : null
   const previousReportVisits = useMemo(() => previousFilters ? filterVisitsForReport(visits, previousFilters) : null, [previousFilters, visits])
-  const previousSummary = useMemo<VisitsReportPeriodSummaryInput | null>(() => {
-    if (!previousReportVisits) return null
-    return { kpis: calculateVisitsReportKpis(previousReportVisits) }
-  }, [previousReportVisits])
+  const previousKpis = useMemo(() => previousReportVisits ? calculateVisitsReportKpis(previousReportVisits) : null, [previousReportVisits])
   const previousDailyTrendGrouped = useMemo(() => {
     if (!previousFilters || !previousReportVisits) return null
     return groupVisitsReportDailyTrendByOutcome(calculateVisitsReportTrendWithStatus(previousReportVisits, previousFilters, trendGranularity))
   }, [previousFilters, previousReportVisits, trendGranularity])
   const showComparisonCharts = comparisonEnabled && previousFilters !== null && previousDailyTrendGrouped !== null
-  const sharedYAxisMax = useMemo(
-    () => showComparisonCharts && previousDailyTrendGrouped ? calculateSharedTrendYAxisMax(dailyTrendGrouped, previousDailyTrendGrouped) : undefined,
-    [showComparisonCharts, dailyTrendGrouped, previousDailyTrendGrouped],
+  // Both comparison charts are drawn against one axis pair, so the same height means the same
+  // value in either panel; the previous period never contributes an ongoing bucket.
+  const sharedTrendAxes = useMemo<VisitsTrendAxes | undefined>(
+    () => showComparisonCharts && previousDailyTrendGrouped
+      ? calculateVisitsTrendAxes(buildVisitsTrendSeries(dailyTrendGrouped, todayDate), buildVisitsTrendSeries(previousDailyTrendGrouped))
+      : undefined,
+    [showComparisonCharts, dailyTrendGrouped, previousDailyTrendGrouped, todayDate],
   )
-  const sharedYAxisTicks = useMemo(() => sharedYAxisMax === undefined ? undefined : calculateVisitsTrendYAxis(sharedYAxisMax).ticks, [sharedYAxisMax])
 
-  const totalDelta = previousSummary ? countDelta(kpis.total, previousSummary.kpis.total) : null
-  const checkedInDelta = previousSummary ? countDelta(kpis.actuallyCheckedIn, previousSummary.kpis.actuallyCheckedIn) : null
-  const averageDurationDelta = previousSummary ? durationDelta(kpis.averageDurationMinutes, previousSummary.kpis.averageDurationMinutes) : null
-  const lateDelta = previousSummary ? countDelta(kpis.lateArrivals, previousSummary.kpis.lateArrivals) : null
-  const summaryText = useMemo(
-    () => buildVisitsReportSummarySentences({ kpis, trend: dailyTrendGrouped }, previousSummary).join(" "),
-    [kpis, dailyTrendGrouped, previousSummary],
-  )
+  const totalDelta = previousKpis ? countDelta(kpis.total, previousKpis.total) : null
+  const checkedInDelta = previousKpis ? countDelta(kpis.actuallyCheckedIn, previousKpis.actuallyCheckedIn) : null
+  const averageDurationDelta = previousKpis ? durationDelta(kpis.averageDurationMinutes, previousKpis.averageDurationMinutes) : null
+  const lateDelta = previousKpis ? countDelta(kpis.lateArrivals, previousKpis.lateArrivals) : null
+  const lateDepartureDelta = previousKpis ? countDelta(kpis.lateDepartures, previousKpis.lateDepartures) : null
 
   const recordsPageCount = getReportPageCount(recordVisits.length)
   const normalizedRecordsPage = Math.min(Math.max(1, recordsPage), recordsPageCount)
@@ -222,20 +225,20 @@ export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabPro
   }
 
   return (
-    <section ref={analysisCardRef} className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card p-3 shadow-panel" aria-labelledby="visits-analysis-title">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <h2 id="visits-analysis-title" className="shrink-0 text-xs font-semibold uppercase tracking-wider text-slate-900">Ziyaret Analizi</h2>
-        {!dateRangeInvalid && (
-          <p className="ml-auto flex min-w-0 flex-wrap justify-end gap-x-1.5 gap-y-0.5 text-[12px] font-medium text-slate-700" aria-label="Ziyaret analiz metrikleri">
-            <MetadataMetric value={`${kpis.total} ziyaret`} delta={comparisonEnabled ? totalDelta : null} />
-            <MetadataMetric value={`${kpis.actuallyCheckedIn} gerçekleşen`} delta={comparisonEnabled ? checkedInDelta : null} />
-            <MetadataMetric value={`Ort. süre ${formatDurationMinutes(kpis.averageDurationMinutes)}`} delta={comparisonEnabled ? averageDurationDelta : null} />
-            <MetadataMetric value={`${kpis.lateArrivals} geç giriş`} delta={comparisonEnabled ? lateDelta : null} last />
-          </p>
-        )}
-      </div>
+    <section ref={analysisCardRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-card px-3 py-2" aria-label="Ziyaret analizi">
+      {!dateRangeInvalid && (
+        <>
+          <div className="mt-1 flex shrink-0 items-start gap-x-1 py-0.5 text-left sm:gap-x-2" aria-label="Ziyaret analiz metrikleri">
+            <AnalysisMetric value={String(kpis.total)} label="Ziyaret" delta={comparisonEnabled ? totalDelta : null} favorableDirection="increase" onActivate={() => onMetricNavigate("all")} />
+            <AnalysisMetric value={String(kpis.actuallyCheckedIn)} label="Gerçekleşen" delta={comparisonEnabled ? checkedInDelta : null} favorableDirection="increase" onActivate={() => onMetricNavigate("completed")} />
+            <AnalysisMetric value={formatDurationMinutes(kpis.averageDurationMinutes)} label="Ort. süre" delta={comparisonEnabled ? averageDurationDelta : null} favorableDirection="decrease" />
+            <AnalysisMetric value={String(kpis.lateArrivals)} label="Geç giriş" delta={comparisonEnabled ? lateDelta : null} favorableDirection="decrease" onActivate={() => onMetricNavigate("late-arrival")} />
+            <AnalysisMetric value={String(kpis.lateDepartures)} label="Geç çıkış" delta={comparisonEnabled ? lateDepartureDelta : null} favorableDirection="decrease" onActivate={() => onMetricNavigate("late-departure")} />
+          </div>
+        </>
+      )}
 
-      <div className="mt-2 min-h-0 flex-1">
+      <div className="mt-3 min-h-0 flex-1">
         {dateRangeInvalid ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <p className="text-sm font-semibold text-slate-900">Geçersiz tarih aralığı</p>
@@ -243,17 +246,16 @@ export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabPro
           </div>
         ) : showComparisonCharts && previousFilters && previousDailyTrendGrouped ? (
           <div className="flex h-full min-h-0 flex-col gap-1.5">
-            <ComparisonTrendPanel points={dailyTrendGrouped} yAxisMax={sharedYAxisMax} yAxisTicks={sharedYAxisTicks} />
-            <ComparisonTrendPanel label={`${comparisonLabel} · ${formatRangeLabel(previousFilters)}`} points={previousDailyTrendGrouped} yAxisMax={sharedYAxisMax} yAxisTicks={sharedYAxisTicks} />
+            <ComparisonTrendPanel primary points={dailyTrendGrouped} todayDate={todayDate} axes={sharedTrendAxes} />
+            <ComparisonTrendPanel label={`${comparisonLabel} · ${formatRangeLabel(previousFilters)}`} points={previousDailyTrendGrouped} axes={sharedTrendAxes} />
           </div>
         ) : (
-          <VisitsTrendChart points={dailyTrendGrouped} />
+          <VisitsTrendChart points={dailyTrendGrouped} todayDate={todayDate} />
         )}
       </div>
 
       {!dateRangeInvalid && (
-        <div className="mt-1.5 flex shrink-0 items-start justify-between gap-4 border-t border-slate-100 pt-1.5">
-          <p className="min-w-0 text-xs leading-snug text-slate-700">{summaryText}</p>
+        <div className="mt-1 flex shrink-0 justify-end border-t border-slate-100 pt-1">
           <VisitsTrendLegend />
         </div>
       )}
@@ -261,17 +263,22 @@ export const VisitsReportTab = forwardRef<ReportExportHandle, VisitsReportTabPro
   )
 })
 
-function ComparisonTrendPanel({ label, points, yAxisMax, yAxisTicks }: { label?: string; points: VisitsReportDailyTrendGroupedPoint[]; yAxisMax?: number; yAxisTicks?: number[] }) {
+function ComparisonTrendPanel({ primary = false, label, points, todayDate, axes }: { primary?: boolean; label?: string; points: VisitsReportDailyTrendGroupedPoint[]; todayDate?: string; axes?: VisitsTrendAxes }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className={`flex min-h-0 basis-0 flex-col ${primary ? "flex-[2]" : "flex-1"}`}>
       {label && <p className="report-png-comparison-label mb-0.5 shrink-0 truncate text-[11px] font-medium uppercase tracking-[0.02em] text-slate-500">{label}</p>}
-      <div className="min-h-0 flex-1"><VisitsTrendChart points={points} yAxisMax={yAxisMax} yAxisTicks={yAxisTicks} /></div>
+      <div className="min-h-0 flex-1"><VisitsTrendChart points={points} todayDate={todayDate} axes={axes} /></div>
     </div>
   )
 }
 
-function MetadataMetric({ value, delta, last = false }: { value: string; delta: MetricDelta | null; last?: boolean }) {
-  return <span className="inline-flex items-baseline"><span className="text-slate-700">{value}</span>{delta && <span className="ml-1 text-[10px] font-normal text-slate-400">{delta.label}</span>}{!last && <span className="ml-1.5 text-slate-300">·</span>}</span>
+function AnalysisMetric({ value, label, delta, favorableDirection, onActivate }: { value: string; label: string; delta: MetricDelta | null; favorableDirection: "increase" | "decrease"; onActivate?: () => void }) {
+  const tone = delta ? getVisitsMetricDeltaTone(delta.difference, favorableDirection) : "neutral"
+  const deltaClassName = tone === "positive" ? "text-emerald-600" : tone === "negative" ? "text-red-600" : "text-slate-400"
+  const content = <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5"><p className="min-w-0 text-base font-semibold leading-none tabular-nums text-slate-900">{value}</p><p className="text-[10px] leading-normal text-slate-500">{label}</p>{delta && <p className={`text-[10px] font-medium leading-normal tabular-nums ${deltaClassName}`}>{delta.label}</p>}</div>
+  return onActivate
+    ? <button type="button" className="min-w-0 flex-1 cursor-pointer rounded-sm pl-1.5 text-left transition-colors hover:bg-blue-50 hover:shadow-[inset_3px_0_0_hsl(var(--primary))] focus-visible:bg-blue-50 focus-visible:shadow-[inset_3px_0_0_hsl(var(--primary))] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400" aria-label={`${label} kayıtlarını gösterin`} onClick={onActivate}>{content}</button>
+    : <div className="min-w-0 flex-1">{content}</div>
 }
 
 function EmptyRecordsState({ invalid = false, searched = false }: { invalid?: boolean; searched?: boolean }) {

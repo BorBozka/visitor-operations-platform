@@ -34,6 +34,11 @@ describe("report chart resize performance", () => {
     expect(containerSource).toContain("new ResizeObserver")
     expect(containerSource).not.toContain("entry.contentRect")
     expect(containerSource).toContain("REPORT_CHART_RESIZE_DEBOUNCE_MS")
+    expect(containerSource).toMatch(/window\.clearTimeout\(resizeTimerRef\.current\)\s*resizeTimerRef\.current = null/)
+    expect(containerSource).toContain("pendingSizeRef.current = null")
+    // The first drawable size is committed straight away; only later resizes are throttled.
+    expect(containerSource).toContain("committed === null || committed.width === 0 || committed.height === 0")
+    expect(containerSource).toContain("commitSize(nextSize)")
   })
 
   it("prevents browser focus outlines only on hover-only report chart surfaces", () => {

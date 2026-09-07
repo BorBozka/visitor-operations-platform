@@ -14,10 +14,28 @@ describe("custom comparison menu contract", () => {
     expect(pageSource).toContain('onSelect={option.value === "custom" ? (event) => event.preventDefault() : undefined}')
   })
 
-  it("commits only a valid custom date and resets a cancelled draft to the committed value", () => {
-    expect(pageSource).toContain('if (!getComparisonPeriod(filters, "custom", nextStart)) return')
-    expect(pageSource).toContain('onCustomStart(nextStart)')
+  it("commits a valid custom date range and resets a cancelled draft to the committed value", () => {
+    expect(pageSource).toContain('if (!getComparisonPeriod(filters, "custom", nextStart, nextEnd)) return')
+    expect(pageSource).toContain('onCustomPeriod(nextStart, nextEnd)')
     expect(pageSource).toContain('setDraftCustomStart(customStart)')
+    expect(pageSource).toContain('setDraftCustomEnd(customEnd)')
     expect(pageSource).toContain('setOpen(false)')
+  })
+
+  it("keeps an untouched custom period quiet and exposes its optional end date", () => {
+    expect(pageSource).toContain('const showCustomStartError = draftCustomStart !== "" && !hasValidCustomStart')
+    expect(pageSource).toContain('const showCustomEndError = draftCustomEnd !== "" && hasValidCustomStart')
+    expect(pageSource).toContain('id="comparison-custom-to"')
+    expect(pageSource).toContain('Bitiş tarihi başlangıç tarihinden önce olamaz.')
+  })
+
+  it("shows the two ranges only after a valid draft and labels unequal lengths as neutral information", () => {
+    expect(pageSource).toContain('const customPreview = getCustomComparisonPreview(filters, draftCustomStart, draftCustomEnd)')
+    expect(pageSource).toContain('{customPreview && (')
+    expect(pageSource).toContain('{formatComparisonRange(filters)} ile {formatComparisonRange(customPreview.period)} karşılaştırılacak.')
+    expect(pageSource).toContain('customPreview.hasDifferentLength')
+    expect(pageSource).toContain('Dönem uzunlukları farklı; toplamlar doğrudan karşılaştırılamaz.')
+    expect(pageSource).toContain('bg-slate-50 px-2 py-1 text-[10px] leading-snug text-slate-600')
+    expect(pageSource).not.toContain('Bitişi boş bırakırsanız seçili dönemin uzunluğuna göre otomatik hesaplanır.')
   })
 })

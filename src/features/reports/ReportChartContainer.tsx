@@ -52,6 +52,21 @@ export function ReportChartContainer({ children }: ReportChartContainerProps) {
       const nextSize = normalizeChartSize(container.clientWidth, container.clientHeight)
       if (sizesMatch(committedSizeRef.current, nextSize)) return
 
+      // Reaching a drawable size for the first time is not a resize: an ancestor that only gets
+      // its own height after this container has mounted (layout effects run children first) would
+      // otherwise cost a full debounce interval of empty chart area on the first paint. Resize
+      // notifications are delivered before paint, so committing here draws in the same frame.
+      const committed = committedSizeRef.current
+      if (committed === null || committed.width === 0 || committed.height === 0) {
+        if (resizeTimerRef.current !== null) {
+          window.clearTimeout(resizeTimerRef.current)
+          resizeTimerRef.current = null
+        }
+        pendingSizeRef.current = null
+        commitSize(nextSize)
+        return
+      }
+
       pendingSizeRef.current = nextSize
       const resizeAt = window.performance.now()
       if (resizeAt - lastResizeAtRef.current > 100 && resizeTimerRef.current !== null) {
@@ -71,7 +86,11 @@ export function ReportChartContainer({ children }: ReportChartContainerProps) {
     observer.observe(container)
     return () => {
       observer.disconnect()
-      if (resizeTimerRef.current !== null) window.clearTimeout(resizeTimerRef.current)
+      if (resizeTimerRef.current !== null) {
+        window.clearTimeout(resizeTimerRef.current)
+        resizeTimerRef.current = null
+      }
+      pendingSizeRef.current = null
     }
   }, [])
 

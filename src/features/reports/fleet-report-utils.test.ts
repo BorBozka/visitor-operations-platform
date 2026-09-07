@@ -5,14 +5,14 @@ import type { Meeting, Visit } from "@/domain/visits"
 import type { ReportsScopeFilters } from "@/features/reports/reports-filters"
 import {
   aggregateFleetResourceLoad,
-  buildFleetInsight,
   buildFleetMetadata,
   calculateFleetReportMetrics,
+  filterFleetReportRecordsByStatus,
   filterAssignmentsForReport,
   FLEET_CATEGORY_AXIS_WIDTH,
-  FLEET_CONCENTRATION_THRESHOLDS,
   FLEET_REPORT_PAGE_SIZE,
   getFleetCategoryAxisWidth,
+  getFleetMetricDeltaTone,
   getFleetReportPageCount,
   getNiceFleetDurationScale,
   getRelatedRecordLabel,
@@ -100,7 +100,7 @@ describe("fleet resource load aggregation", () => {
   })
 })
 
-describe("fleet metadata and insight", () => {
+describe("fleet metadata and delta tone", () => {
   const current = calculateFleetReportMetrics(reportAssignments)
   const previous = calculateFleetReportMetrics(reportAssignments.slice(0, 2))
 
@@ -108,29 +108,20 @@ describe("fleet metadata and insight", () => {
     expect(buildFleetMetadata(current, previous)).toBe("4 görev +2 · 1 iptal +1 · 4 sa 30 dk planlama yükü +1 sa · 2 araç +1 · 2 şoför +1")
   })
 
-  it("builds a deterministic comparison insight without zero-duration or NaN text", () => {
-    const text = buildFleetInsight({ current, previous, dimension: "vehicles", currentResources: aggregateFleetResourceLoad(reportAssignments, "vehicles"), previousResources: aggregateFleetResourceLoad(reportAssignments.slice(0, 2), "vehicles") })
-    expect(text).toContain("Ford Transit üzerinde belirgin biçimde yoğunlaşıyor")
-    expect(text).not.toMatch(/NaN|\b0 saat/i)
+  it("uses the same cancelled definition for records filtering and the KPI", () => {
+    const scoped = filterAssignmentsForReport(reportAssignments, { ...baseFilters, startDate: "2026-08-12", endDate: "2026-08-12", companyId: "bplas-otomotiv", facilityId: "otomotiv-uretim" })
+    const cancelled = filterFleetReportRecordsByStatus(scoped, "cancelled")
+
+    expect(ids(searchFleetReportRecords(cancelled, "iptal"))).toEqual(["a4"])
+    expect(calculateFleetReportMetrics(scoped).cancelledAssignments).toBe(cancelled.length)
   })
 
-  it("does not force a normal-load insight for cancelled-only records", () => {
-    expect(buildFleetInsight({ current: calculateFleetReportMetrics(reportAssignments.slice(3)), previous: null, dimension: "drivers", currentResources: [] })).toBe("Seçili dönemde yalnızca iptal edilmiş görevler bulunuyor.")
+  it("treats an increase in cancellations as negative while more assignments remain positive", () => {
+    expect(getFleetMetricDeltaTone(1, "decrease")).toBe("negative")
+    expect(getFleetMetricDeltaTone(-1, "decrease")).toBe("positive")
+    expect(getFleetMetricDeltaTone(1, "increase")).toBe("positive")
   })
 
-  it("uses explicit dominant, moderate, and balanced concentration thresholds", () => {
-    expect(FLEET_CONCENTRATION_THRESHOLDS).toEqual({ dominant: 0.55, moderate: 0.25 })
-    expect(insightFor([60, 40])).toBe("Planlama yükü Kaynak 1 üzerinde belirgin biçimde yoğunlaşıyor.")
-    expect(insightFor([40, 30, 30])).toBe("Kaynak 1 en yüksek planlama yükünü taşıyor ancak yük diğer araçlara da dağılıyor.")
-    expect(insightFor([34, 33, 33])).toBe("Planlama yükü araçlar arasında görece dengeli dağılıyor.")
-    expect(insightFor([50, 50])).toBe("Planlama yükü araçlar arasında görece dengeli dağılıyor.")
-  })
-
-  it("handles single-resource, empty, and zero-duration edge cases naturally", () => {
-    expect(insightFor([100])).toBe("Planlama yükü yalnızca Kaynak 1 üzerinde bulunuyor.")
-    expect(buildFleetInsight({ current: { totalAssignments: 0, cancelledAssignments: 0, plannedLoadMinutes: 0, usedVehicleCount: 0, usedDriverCount: 0 }, previous: null, dimension: "vehicles", currentResources: [] })).toBe("Seçili dönemde kayıtlı araç / şoför görevi bulunmuyor.")
-    expect(buildFleetInsight({ current: { totalAssignments: 1, cancelledAssignments: 0, plannedLoadMinutes: 0, usedVehicleCount: 1, usedDriverCount: 1 }, previous: null, dimension: "vehicles", currentResources: [{ resourceId: "r", resourceName: "Sıfır", plannedMinutes: 0, assignmentCount: 1 }] })).toBe("Seçili dönemde aktif görevler için planlanan süre bulunmuyor.")
-  })
 })
 
 describe("fleet chart scale and interaction helpers", () => {
@@ -157,14 +148,17 @@ describe("fleet chart scale and interaction helpers", () => {
 
 describe("fleet report URL state and pagination", () => {
   it("defaults invalid workspace parameters and persists non-default state", () => {
-    expect(parseFleetReportWorkspace(new URLSearchParams("fleetView=wrong&fleetDimension=wrong&fleetPage=0"))).toEqual({ view: "analysis", dimension: "vehicles", page: 1, search: "", sort: null })
+    expect(parseFleetReportWorkspace(new URLSearchParams("fleetView=wrong&fleetDimension=wrong&fleetPage=0"))).toEqual({ view: "analysis", dimension: "vehicles", page: 1, search: "", status: "all", sort: null })
     const records = setFleetReportWorkspace(new URLSearchParams("tab=vehicle&granularity=daily&page=3"), { view: "records", dimension: "drivers" })
     expect(records.toString()).toBe("tab=vehicle&granularity=daily&page=3&fleetView=records&fleetDimension=drivers")
     expect(setFleetReportPage(records, 2).toString()).toBe("tab=vehicle&granularity=daily&page=3&fleetView=records&fleetDimension=drivers&fleetPage=2")
+    expect(parseFleetReportWorkspace(new URLSearchParams("fleetStatus=cancelled")).status).toBe("cancelled")
+    expect(setFleetReportWorkspace(new URLSearchParams("fleetPage=2&fleetSearch=Ford"), { status: "cancelled" }).toString()).toBe("fleetSearch=Ford&fleetStatus=cancelled")
+    expect(setFleetReportWorkspace(new URLSearchParams("fleetStatus=cancelled"), { status: "all" }).toString()).toBe("")
   })
 
   it("ignores visits workspace keys so tab switches cannot overwrite fleet state", () => {
-    expect(parseFleetReportWorkspace(new URLSearchParams("view=records&page=4&fleetView=records&fleetPage=3"))).toEqual({ view: "records", dimension: "vehicles", page: 3, search: "", sort: null })
+    expect(parseFleetReportWorkspace(new URLSearchParams("view=records&page=4&fleetView=records&fleetPage=3"))).toEqual({ view: "records", dimension: "vehicles", page: 3, search: "", status: "all", sort: null })
   })
 
   it("uses the fixed eight-row records page size", () => {
@@ -187,15 +181,6 @@ describe("getRelatedRecordLabel", () => {
 })
 
 function ids(records: PlannedTransportAssignment[]) { return records.map((record) => record.id) }
-
-function insightFor(loads: number[]) {
-  return buildFleetInsight({
-    current: { totalAssignments: loads.length, cancelledAssignments: 0, plannedLoadMinutes: loads.reduce((sum, value) => sum + value, 0), usedVehicleCount: loads.length, usedDriverCount: loads.length },
-    previous: null,
-    dimension: "vehicles",
-    currentResources: loads.map((plannedMinutes, index) => ({ resourceId: String(index), resourceName: `Kaynak ${index + 1}`, plannedMinutes, assignmentCount: 1 })),
-  })
-}
 
 function assignment(id: string, overrides: Partial<PlannedTransportAssignment> = {}): PlannedTransportAssignment {
   return { id, companyId: "bplas", companyName: "BPLAS A.Ş.", facilityId: "bplas-merkez", facilityName: "Merkez Tesis", plannedStart: "2026-08-10T08:00:00+03:00", plannedEnd: "2026-08-10T09:00:00+03:00", purpose: "Test görevi", vehicleResourceId: "vehicle-1", vehicleName: "Transit", vehicleLicensePlate: "16 BPL 101", driverResourceId: "driver-1", driverName: "Ayşe Demir", status: "ACTIVE", createdAt: "2026-08-10T08:00:00+03:00", ...overrides }

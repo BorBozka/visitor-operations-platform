@@ -13,10 +13,15 @@ export type GoodsReportView = "analysis" | "records"
 export type GoodsReportGranularity = "daily" | "weekly"
 export type GoodsTrendGranularity = GoodsReportGranularity | "hourly"
 export type GoodsReportSortField = "direction" | "scope" | "counterparty" | "planned" | "actual" | "status" | "reference" | "driver"
+export const goodsReportRecordsStatusFilters = ["all", "inbound", "outbound", "late"] as const
+export type GoodsReportRecordsStatusFilter = (typeof goodsReportRecordsStatusFilters)[number]
 
-export interface GoodsReportWorkspaceState { view: GoodsReportView; page: number; search: string; sort: SingleSortState<GoodsReportSortField> }
-export interface GoodsReportKpis { total: number; inbound: number; outbound: number; lateRate: number }
+export interface GoodsReportWorkspaceState { view: GoodsReportView; page: number; search: string; status: GoodsReportRecordsStatusFilter; sort: SingleSortState<GoodsReportSortField> }
+export interface GoodsReportKpis { total: number; inbound: number; outbound: number; lateCount: number }
 export interface GoodsMovementTrendPoint { date: string; label: string; periodDayCount?: number; INBOUND: number; OUTBOUND: number }
+export interface GoodsMovementTrendChartPoint extends GoodsMovementTrendPoint { TOTAL: number; TREND: number | null; ONGOING: number | null; isToday: boolean; isOngoing: boolean }
+export interface GoodsMovementTrendSeries { points: GoodsMovementTrendChartPoint[]; completedMax: number; ongoingIndex: number }
+export interface GoodsTrendAxes { total: ReturnType<typeof calculateGoodsTrendYAxis> }
 
 export const GOODS_REPORT_STATUS_LABELS: Record<ReturnType<typeof getGoodsMovementDisplayStatus>, string> = {
   PLANNED: "Planlandı", COMPLETED: "Tamamlandı", CANCELLED: "İptal", LATE: "Gecikti",
@@ -41,6 +46,13 @@ export function searchGoodsReportRecords(movements: GoodsMovement[], search: str
   return movements.filter((movement) => matchesReportSearch(search, [movement.counterpartyName, movement.referenceNumber, movement.actualPlate, movement.actualDriverName, movement.companyName, movement.facilityName]))
 }
 
+export function filterGoodsReportRecordsByStatus(movements: GoodsMovement[], status: GoodsReportRecordsStatusFilter, now = new Date()): GoodsMovement[] {
+  if (status === "all") return movements
+  if (status === "inbound") return movements.filter((movement) => movement.direction === "INBOUND")
+  if (status === "outbound") return movements.filter((movement) => movement.direction === "OUTBOUND")
+  return movements.filter((movement) => getGoodsMovementDisplayStatus(movement, now) === "LATE")
+}
+
 export function sortGoodsReportRecords(movements: GoodsMovement[], sort: SingleSortState<GoodsReportSortField>) {
   return sortReportRecords(movements, sort, (movement, field) => {
     if (field === "direction") return movement.direction
@@ -57,9 +69,9 @@ export function sortGoodsReportRecords(movements: GoodsMovement[], sort: SingleS
 
 export function calculateGoodsReportKpis(movements: GoodsMovement[], now = new Date()): GoodsReportKpis {
   const total = movements.length
-  const inbound = movements.filter((movement) => movement.direction === "INBOUND").length
-  const late = movements.filter((movement) => getGoodsMovementDisplayStatus(movement, now) === "LATE").length
-  return { total, inbound, outbound: total - inbound, lateRate: total === 0 ? 0 : (late / total) * 100 }
+  const inbound = filterGoodsReportRecordsByStatus(movements, "inbound", now).length
+  const lateCount = filterGoodsReportRecordsByStatus(movements, "late", now).length
+  return { total, inbound, outbound: total - inbound, lateCount }
 }
 
 function emptyPoint(date: string, label: string): GoodsMovementTrendPoint { return { date, label, INBOUND: 0, OUTBOUND: 0 } }
@@ -128,9 +140,47 @@ export function calculateGoodsMovementWeeklyTrend(daily: GoodsMovementTrendPoint
 }
 
 export function calculateGoodsTrendYAxis(rawMax: number) { return calculateVisitsTrendYAxis(rawMax) }
-export function calculateSharedGoodsTrendYAxis(...pointGroups: GoodsMovementTrendPoint[][]) {
-  const rawMax = pointGroups.reduce((largest, points) => Math.max(largest, ...points.map((point) => point.INBOUND + point.OUTBOUND), 0), 0)
-  return calculateGoodsTrendYAxis(rawMax)
+const GOODS_TREND_AXIS_HEADROOM = 1.1
+
+export function isGoodsMovementTrendTodayPoint(point: GoodsMovementTrendPoint, todayDate: string): boolean {
+  if (point.date.startsWith("hour-")) return true
+  if (point.date === todayDate) return true
+
+  const weeklyStart = /^week-\d+-(\d{4}-\d{2}-\d{2})$/.exec(point.date)?.[1]
+  if (!weeklyStart || !point.periodDayCount) return false
+  const offset = differenceInCalendarDays(parse(todayDate, "yyyy-MM-dd", new Date()), parse(weeklyStart, "yyyy-MM-dd", new Date()))
+  return offset >= 0 && offset < point.periodDayCount
+}
+
+// The unfinished trailing bucket may include a day full of planned movements. Hold it out of the
+// ceiling calculation so completed days remain readable, while retaining its real total for the
+// dashed continuation and tooltip.
+export function buildGoodsMovementTrendSeries(points: GoodsMovementTrendPoint[], todayDate?: string): GoodsMovementTrendSeries {
+  const lastIndex = points.length - 1
+  const ongoingIndex = todayDate !== undefined && lastIndex >= 0 && isGoodsMovementTrendTodayPoint(points[lastIndex], todayDate) ? lastIndex : -1
+  const chartPoints = points.map((point, index): GoodsMovementTrendChartPoint => {
+    const total = point.INBOUND + point.OUTBOUND
+    const isOngoing = index === ongoingIndex
+    return { ...point, TOTAL: total, TREND: isOngoing ? null : total, ONGOING: null, isToday: todayDate !== undefined && isGoodsMovementTrendTodayPoint(point, todayDate), isOngoing }
+  })
+  const scaleSource = chartPoints.some((point) => !point.isOngoing) ? chartPoints.filter((point) => !point.isOngoing) : chartPoints
+  return { points: chartPoints, completedMax: scaleSource.reduce((max, point) => Math.max(max, point.TOTAL), 0), ongoingIndex }
+}
+
+export function calculateGoodsTrendAxes(...series: GoodsMovementTrendSeries[]): GoodsTrendAxes {
+  const completedMax = series.reduce((max, item) => Math.max(max, item.completedMax), 0)
+  return { total: calculateGoodsTrendYAxis(completedMax * GOODS_TREND_AXIS_HEADROOM) }
+}
+
+export function calculateSharedGoodsTrendYAxis(current: GoodsMovementTrendPoint[], previous: GoodsMovementTrendPoint[], todayDate?: string) {
+  return calculateGoodsTrendAxes(buildGoodsMovementTrendSeries(current, todayDate), buildGoodsMovementTrendSeries(previous))
+}
+
+export function withGoodsMovementTrendOngoingSegment(series: GoodsMovementTrendSeries, axisMax: number): GoodsMovementTrendChartPoint[] {
+  if (series.ongoingIndex < 0) return series.points
+  return series.points.map((point, index) => index === series.ongoingIndex || index === series.ongoingIndex - 1
+    ? { ...point, ONGOING: Math.min(point.TOTAL, axisMax) }
+    : point)
 }
 
 export function formatGoodsReportDelta(current: number, previous: number) {
@@ -138,41 +188,22 @@ export function formatGoodsReportDelta(current: number, previous: number) {
   return { difference, label: difference > 0 ? `+${difference}` : difference < 0 ? `−${Math.abs(difference)}` : "değişmedi" }
 }
 
-export function buildGoodsMetadata(current: GoodsReportKpis, previous: GoodsReportKpis | null) {
-  const values = [`${current.total} hareket`, `${current.inbound} gelen`, `${current.outbound} giden`, `%${current.lateRate.toFixed(1).replace(".", ",")} geciken`]
-  if (!previous) return values.join(" · ")
-  return [`${values[0]} ${formatGoodsReportDelta(current.total, previous.total).label}`, `${values[1]} ${formatGoodsReportDelta(current.inbound, previous.inbound).label}`, `${values[2]} ${formatGoodsReportDelta(current.outbound, previous.outbound).label}`, values[3]].join(" · ")
-}
-
-export function buildGoodsInsight(current: { kpis: GoodsReportKpis; trend: GoodsMovementTrendPoint[] }, previous: GoodsReportKpis | null): string {
-  const { kpis, trend } = current
-  if (kpis.total === 0) return "Seçili dönemde kayıtlı mal hareketi bulunmuyor."
-  const busiestCount = trend.reduce((max, point) => Math.max(max, point.INBOUND + point.OUTBOUND), 0)
-  const busiest = trend.find((point) => point.INBOUND + point.OUTBOUND === busiestCount)
-  const periodNoun = busiest?.label.includes(":") ? "saat" : busiest?.label.includes("–") ? "dönem" : "gün"
-  const sentences = [busiest && busiestCount > 0 ? `En yoğun ${periodNoun} ${busiest.label} oldu.` : "Zaman dağılımı için planlanan saat bilgisi bulunmuyor.", `Hareketlerin %${Math.round((kpis.inbound / kpis.total) * 100)}'i gelen yönde gerçekleşti.`]
-  const lateCount = Math.round((kpis.lateRate / 100) * kpis.total)
-  if (lateCount > 0) sentences.push(`${lateCount} hareket gecikti.`)
-  if (previous) {
-    const delta = kpis.total - previous.total
-    if (delta !== 0) sentences.push(`Toplam hareket sayısı önceki döneme göre ${Math.abs(delta)} ${delta > 0 ? "arttı" : "azaldı"}.`)
-  }
-  return sentences.slice(0, 3).join(" ")
-}
-
 export function isGoodsRecordActivationKey(key: string) { return key === "Enter" || key === " " }
 
 export function parseGoodsReportWorkspace(searchParams: URLSearchParams): GoodsReportWorkspaceState {
   const rawPage = Number(searchParams.get("goodsPage"))
   const rawSort = searchParams.get("goodsSort")
+  const rawStatus = searchParams.get("goodsStatus")
   const validSort: GoodsReportSortField | null = ["direction", "scope", "counterparty", "planned", "actual", "status", "reference", "driver"].includes(rawSort ?? "") ? rawSort as GoodsReportSortField : null
-  return { view: searchParams.get("goodsView") === "records" ? "records" : "analysis", page: Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1, search: searchParams.get("goodsSearch")?.trim() ?? "", sort: validSort ? { field: validSort, direction: searchParams.get("goodsDir") === "desc" ? "desc" : "asc" } : null }
+  const status: GoodsReportRecordsStatusFilter = goodsReportRecordsStatusFilters.includes(rawStatus as GoodsReportRecordsStatusFilter) ? rawStatus as GoodsReportRecordsStatusFilter : "all"
+  return { view: searchParams.get("goodsView") === "records" ? "records" : "analysis", page: Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1, search: searchParams.get("goodsSearch")?.trim() ?? "", status, sort: validSort ? { field: validSort, direction: searchParams.get("goodsDir") === "desc" ? "desc" : "asc" } : null }
 }
 
-export function setGoodsReportWorkspace(current: URLSearchParams, nextState: Partial<Pick<GoodsReportWorkspaceState, "view" | "search" | "sort">>) {
+export function setGoodsReportWorkspace(current: URLSearchParams, nextState: Partial<Pick<GoodsReportWorkspaceState, "view" | "search" | "status" | "sort">>) {
   const next = new URLSearchParams(current)
   if (nextState.view) { if (nextState.view === "analysis") next.delete("goodsView"); else next.set("goodsView", nextState.view) }
   if (nextState.search !== undefined) { if (nextState.search.trim()) next.set("goodsSearch", nextState.search.trim()); else next.delete("goodsSearch") }
+  if (nextState.status !== undefined) { if (nextState.status === "all") next.delete("goodsStatus"); else next.set("goodsStatus", nextState.status) }
   if (nextState.sort !== undefined) { if (nextState.sort) { next.set("goodsSort", nextState.sort.field); next.set("goodsDir", nextState.sort.direction) } else { next.delete("goodsSort"); next.delete("goodsDir") } }
   next.delete("goodsPage")
   return next

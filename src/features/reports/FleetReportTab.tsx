@@ -8,12 +8,12 @@ import { FleetAssignmentDetailDialog } from "@/features/reports/FleetAssignmentD
 import { FleetLoadChart } from "@/features/reports/FleetLoadChart"
 import {
   aggregateFleetResourceLoad,
-  buildFleetInsight,
-  buildFleetMetadata,
   calculateFleetReportMetrics,
+  filterFleetReportRecordsByStatus,
   filterAssignmentsForReport,
   FLEET_REPORT_PAGE_SIZE,
   getFleetLoadChartResources,
+  getFleetMetricDeltaTone,
   getFleetReportPageCount,
   getRelatedRecordLabel,
   getVisibleFleetReportPageNumbers,
@@ -26,8 +26,10 @@ import {
   searchFleetReportRecords,
   sortFleetReportRecords,
   type FleetReportSortField,
+  type FleetReportRecordsStatusFilter,
 } from "@/features/reports/fleet-report-utils"
 import { ReportPagination } from "@/features/reports/ReportPagination"
+import { formatDurationMinutes } from "@/features/reports/report-format"
 import {
   buildFleetReportRows,
   downloadReportCsv,
@@ -62,7 +64,7 @@ export const FleetReportTab = forwardRef<ReportExportHandle, { meetings: Meeting
   }, [reloadNonce])
 
   const reportAssignments = useMemo(() => filterAssignmentsForReport(assignments, filters), [assignments, filters])
-  const recordAssignments = useMemo(() => sortFleetReportRecords(searchFleetReportRecords(reportAssignments, workspace.search, (assignment) => getRelatedRecordLabel(assignment, meetings, visits)), workspace.sort), [meetings, reportAssignments, visits, workspace.search, workspace.sort])
+  const recordAssignments = useMemo(() => sortFleetReportRecords(searchFleetReportRecords(filterFleetReportRecordsByStatus(reportAssignments, workspace.status), workspace.search, (assignment) => getRelatedRecordLabel(assignment, meetings, visits)), workspace.sort), [meetings, reportAssignments, visits, workspace.search, workspace.sort, workspace.status])
   const metrics = useMemo(() => calculateFleetReportMetrics(reportAssignments), [reportAssignments])
   const currentResources = useMemo(() => aggregateFleetResourceLoad(reportAssignments, workspace.dimension), [reportAssignments, workspace.dimension])
   const previousFilters = comparisonFilters
@@ -76,11 +78,9 @@ export const FleetReportTab = forwardRef<ReportExportHandle, { meetings: Meeting
     [comparisonResources, currentResources, hasComparisonData],
   )
   const totalChartResourceCount = hasComparisonData ? comparisonResources.length : currentResources.length
-  const insight = useMemo(() => {
-    const base = buildFleetInsight({ current: metrics, previous: hasComparisonData ? previousMetrics : null, dimension: workspace.dimension, currentResources, previousResources })
-    return previousFilters && !hasComparisonData ? `${base} Karşılaştırma döneminde görev kaydı yok.` : base
-  }, [currentResources, hasComparisonData, metrics, previousFilters, previousMetrics, previousResources, workspace.dimension])
-  const metadata = useMemo(() => buildFleetMetadata(metrics, hasComparisonData ? previousMetrics : null), [hasComparisonData, metrics, previousMetrics])
+  const totalDelta = hasComparisonData && previousMetrics ? countDelta(metrics.totalAssignments, previousMetrics.totalAssignments) : null
+  const cancelledDelta = hasComparisonData && previousMetrics ? countDelta(metrics.cancelledAssignments, previousMetrics.cancelledAssignments) : null
+  const plannedLoadDelta = hasComparisonData && previousMetrics ? durationDelta(metrics.plannedLoadMinutes, previousMetrics.plannedLoadMinutes) : null
   const pageCount = getFleetReportPageCount(recordAssignments.length)
   const page = Math.min(workspace.page, pageCount)
   const paginatedAssignments = useMemo(() => paginateFleetReport(recordAssignments, page), [recordAssignments, page])
@@ -88,6 +88,8 @@ export const FleetReportTab = forwardRef<ReportExportHandle, { meetings: Meeting
   const visibleEnd = Math.min(page * FLEET_REPORT_PAGE_SIZE, recordAssignments.length)
   const headers = useMemo(() => FLEET_REPORT_COLUMNS.map((column) => column.header), [])
   const exportFilenameBase = `arac-sofor-raporu_${filters.startDate || "tumu"}_${filters.endDate || "tumu"}`
+
+  const openRecordsForMetric = (status: FleetReportRecordsStatusFilter) => setSearchParams(setFleetReportWorkspace(searchParams, { view: "records", status }))
 
   useEffect(() => {
     // URL pagination remains valid after a direct URL edit, filter change, or a shrinking result.
@@ -168,20 +170,46 @@ export const FleetReportTab = forwardRef<ReportExportHandle, { meetings: Meeting
   }
 
   return (
-    <section id="fleet-analysis-card" className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card p-3 shadow-panel" aria-labelledby="fleet-analysis-title">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-2">
-        <h2 id="fleet-analysis-title" className="min-w-0 text-xs font-semibold uppercase tracking-wider text-slate-900">Araç / Şoför Analizi</h2>
-        <p className="max-w-full text-right text-[11px] tabular-nums text-slate-500">{metadata}</p>
-      </div>
+    <section id="fleet-analysis-card" className="flex h-full min-h-0 flex-col overflow-hidden bg-card px-3 py-2" aria-label="Araç / şoför analizi">
+      {!dateRangeInvalid && (
+        <>
+          <div className="mt-1 flex shrink-0 items-start gap-x-2 py-0.5 text-left" aria-label="Araç / şoför analiz metrikleri">
+            <FleetAnalysisMetric value={String(metrics.totalAssignments)} label="Görev" delta={totalDelta} favorableDirection="increase" onActivate={() => openRecordsForMetric("all")} />
+            <FleetAnalysisMetric value={String(metrics.cancelledAssignments)} label="İptal" delta={cancelledDelta} favorableDirection="decrease" onActivate={() => openRecordsForMetric("cancelled")} />
+            <FleetAnalysisMetric value={formatDurationMinutes(metrics.plannedLoadMinutes)} label="Planlama yükü" delta={plannedLoadDelta} favorableDirection="increase" />
+            <p className="ml-auto shrink-0 text-right text-[10px] leading-normal tabular-nums text-slate-500">{metrics.usedVehicleCount} araç · {metrics.usedDriverCount} şoför</p>
+          </div>
+        </>
+      )}
 
-      <div className="mt-2 min-h-0 flex-1">
+      <div className="mt-3 min-h-0 flex-1">
         {dateRangeInvalid ? <EmptyState title="Geçersiz tarih aralığı" description="Başlangıç tarihi bitiş tarihinden sonra olamaz." /> : <FleetLoadChart resources={chartResources} dimension={workspace.dimension} comparison={hasComparisonData} comparisonLabel={comparisonLabel} totalResourceCount={totalChartResourceCount} />}
       </div>
-
-      {!dateRangeInvalid && <p className="mt-2 shrink-0 border-t border-slate-100 pt-2 text-xs leading-snug text-slate-700">{insight}</p>}
     </section>
   )
 })
+
+interface FleetMetricDelta {
+  difference: number
+  label: string
+}
+
+function countDelta(current: number, previous: number): FleetMetricDelta {
+  const difference = current - previous
+  return { difference, label: difference === 0 ? "değişmedi" : `${difference > 0 ? "+" : ""}${difference}` }
+}
+
+function durationDelta(current: number, previous: number): FleetMetricDelta {
+  const difference = current - previous
+  return { difference, label: difference === 0 ? "değişmedi" : `${difference > 0 ? "+" : "-"}${formatDurationMinutes(Math.abs(difference))}` }
+}
+
+function FleetAnalysisMetric({ value, label, delta, favorableDirection, onActivate }: { value: string; label: string; delta: FleetMetricDelta | null; favorableDirection: "increase" | "decrease"; onActivate?: () => void }) {
+  const tone = delta ? getFleetMetricDeltaTone(delta.difference, favorableDirection) : "neutral"
+  const deltaClassName = tone === "positive" ? "text-emerald-600" : tone === "negative" ? "text-red-600" : "text-slate-400"
+  const content = <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5"><p className="min-w-0 text-base font-semibold leading-none tabular-nums text-slate-900">{value}</p><p className="text-[10px] leading-normal text-slate-500">{label}</p>{delta && <p className={`text-[10px] font-medium leading-normal tabular-nums ${deltaClassName}`}>{delta.label}</p>}</div>
+  return onActivate ? <button type="button" className="min-w-0 flex-1 cursor-pointer rounded-sm pl-1.5 text-left transition-colors hover:bg-blue-50 hover:shadow-[inset_3px_0_0_hsl(var(--primary))] focus-visible:bg-blue-50 focus-visible:shadow-[inset_3px_0_0_hsl(var(--primary))] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400" aria-label={`${label} kayıtlarını gösterin`} onClick={onActivate}>{content}</button> : <div className="min-w-0 flex-1">{content}</div>
+}
 
 function FleetRecordRow({ assignment, meetings, visits, onOpen }: { assignment: PlannedTransportAssignment; meetings: Meeting[]; visits: Visit[]; onOpen(row: HTMLTableRowElement): void }) {
   const relatedLabel = getRelatedRecordLabel(assignment, meetings, visits)

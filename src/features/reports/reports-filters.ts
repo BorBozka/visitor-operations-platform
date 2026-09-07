@@ -3,9 +3,12 @@ import { addDays, differenceInCalendarDays, format, isValid, parse, subDays, sub
 import type { VisitReferenceData } from "@/domain/visits"
 import { getQuickDateRangeOptions, matchesQuickDateRange, type QuickDateRangeKey, type QuickDateRangeOption } from "@/lib/quick-date-range"
 import type { SingleSortState } from "@/lib/sort"
-import type { VisitsReportSortField } from "@/features/reports/visits-report-utils"
+import { visitsReportRecordsStatusFilters, type VisitsReportRecordsStatusFilter, type VisitsReportSortField } from "@/features/reports/visits-report-utils"
 
-export const reportTabs = ["visits", "vehicle", "goods"] as const
+// Identity/route values are unchanged; this array order is only the left-to-right display order
+// of the tab strip. Default tab stays "visits" (see parseReportsQuery) and every `?tab=` deep
+// link keeps working because tab resolution is membership-based, not positional.
+export const reportTabs = ["visits", "goods", "vehicle"] as const
 export type ReportTab = (typeof reportTabs)[number]
 export const reportViews = ["analysis", "records"] as const
 export type ReportView = (typeof reportViews)[number]
@@ -34,6 +37,7 @@ export interface ReportsQueryState {
   granularity: ReportGranularity
   search: string
   sort: SingleSortState<VisitsReportSortField>
+  recordsStatus: VisitsReportRecordsStatusFilter
 }
 
 export type QuickRangeKey = QuickDateRangeKey
@@ -66,8 +70,10 @@ export function parseReportsQuery(searchParams: URLSearchParams, referenceData: 
   const granularity: ReportGranularity = searchParams.get("granularity") === "weekly" ? "weekly" : "daily"
   const rawSort = searchParams.get("visitSort")
   const validSort: VisitsReportSortField | null = ["date", "visitor", "company", "host", "planned", "duration", "status"].includes(rawSort ?? "") ? rawSort as VisitsReportSortField : null
+  const statusParam = searchParams.get("visitStatus")
+  const recordsStatus: VisitsReportRecordsStatusFilter = visitsReportRecordsStatusFilters.includes(statusParam as VisitsReportRecordsStatusFilter) ? statusParam as VisitsReportRecordsStatusFilter : "all"
 
-  const comparisonPeriod = getComparisonPeriod(filters, requestedComparison, searchParams.get("compareFrom"))
+  const comparisonPeriod = getComparisonPeriod(filters, requestedComparison, searchParams.get("compareFrom"), searchParams.get("compareTo"))
   // A custom comparison only exists once its equal-length range can be derived. This rejects
   // hand-authored or interrupted `comparison=custom` URLs as safely as the UI avoids creating them.
   const comparison: ReportComparisonMode = requestedComparison === "custom" && !comparisonPeriod ? "none" : requestedComparison
@@ -81,6 +87,7 @@ export function parseReportsQuery(searchParams: URLSearchParams, referenceData: 
     granularity,
     search: searchParams.get("visitSearch")?.trim() ?? "",
     sort: validSort ? { field: validSort, direction: searchParams.get("visitDir") === "desc" ? "desc" : "asc" } : null,
+    recordsStatus,
     filters,
   }
 }
@@ -143,10 +150,11 @@ export function setRecordsReportRange(current: URLSearchParams, startDate: strin
   return next
 }
 
-export function setVisitsReportRecordsWorkspace(current: URLSearchParams, nextState: { search?: string; sort?: SingleSortState<VisitsReportSortField> }) {
+export function setVisitsReportRecordsWorkspace(current: URLSearchParams, nextState: { search?: string; sort?: SingleSortState<VisitsReportSortField>; status?: VisitsReportRecordsStatusFilter }) {
   const next = new URLSearchParams(current)
   if (nextState.search !== undefined) { if (nextState.search.trim()) next.set("visitSearch", nextState.search.trim()); else next.delete("visitSearch") }
   if (nextState.sort !== undefined) { if (nextState.sort) { next.set("visitSort", nextState.sort.field); next.set("visitDir", nextState.sort.direction) } else { next.delete("visitSort"); next.delete("visitDir") } }
+  if (nextState.status !== undefined) { if (nextState.status === "all") next.delete("visitStatus"); else next.set("visitStatus", nextState.status) }
   next.delete("page")
   return next
 }
@@ -169,14 +177,15 @@ export function setReportsComparison(current: URLSearchParams, comparison: Repor
   return next
 }
 
-export function setReportsCustomComparison(current: URLSearchParams, filters: Pick<ReportsScopeFilters, "startDate" | "endDate">, compareFrom: string) {
-  const period = getComparisonPeriod(filters, "custom", compareFrom)
+export function setReportsCustomComparison(current: URLSearchParams, filters: Pick<ReportsScopeFilters, "startDate" | "endDate">, compareFrom: string, compareTo = "") {
+  const period = getComparisonPeriod(filters, "custom", compareFrom, compareTo)
   // Do not manufacture an incomplete custom comparison. The caller may be holding a date
   // field draft, but URL state remains the previously committed comparison until it is valid.
   if (!period) return new URLSearchParams(current)
   const next = setReportsComparison(current, "custom")
   next.set("compareFrom", period.startDate)
-  next.set("compareTo", period.endDate)
+  if (compareTo) next.set("compareTo", period.endDate)
+  else next.delete("compareTo")
   clearReportPages(next)
   return next
 }
@@ -293,9 +302,9 @@ function parseDateParameter(value: string | null) {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
 }
 
-// Shared comparison range model for every report surface. All ranges are inclusive, so custom
-// ranges deliberately inherit the selected period's exact day count.
-export function getComparisonPeriod(filters: Pick<ReportsScopeFilters, "startDate" | "endDate">, mode: ReportComparisonMode, customStart?: string | null): { startDate: string; endDate: string } | null {
+// Shared comparison range model for every report surface. All ranges are inclusive. A custom
+// end may be selected independently; leaving it empty retains the equal-length fallback.
+export function getComparisonPeriod(filters: Pick<ReportsScopeFilters, "startDate" | "endDate">, mode: ReportComparisonMode, customStart?: string | null, customEnd?: string | null): { startDate: string; endDate: string } | null {
   if (mode === "none") return null
   if (mode === "previous") return getPreviousPeriod(filters)
   if (!filters.startDate || !filters.endDate) return null
@@ -306,7 +315,34 @@ export function getComparisonPeriod(filters: Pick<ReportsScopeFilters, "startDat
   if (!customStart || !/^\d{4}-\d{2}-\d{2}$/.test(customStart)) return null
   const custom = parse(customStart, "yyyy-MM-dd", new Date())
   if (!isValid(custom)) return null
-  return { startDate: isoDate(custom), endDate: isoDate(addDays(custom, differenceInCalendarDays(end, start))) }
+  if (!customEnd) return { startDate: isoDate(custom), endDate: isoDate(addDays(custom, differenceInCalendarDays(end, start))) }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(customEnd)) return null
+  const customEndDate = parse(customEnd, "yyyy-MM-dd", new Date())
+  if (!isValid(customEndDate) || customEndDate < custom) return null
+  return { startDate: isoDate(custom), endDate: isoDate(customEndDate) }
+}
+
+export interface CustomComparisonPreview {
+  period: { startDate: string; endDate: string }
+  hasDifferentLength: boolean
+}
+
+// This preview deliberately uses the same inclusive range calculation as the committed custom
+// comparison. It gives the menu live feedback without changing URL state for a partial draft.
+export function getCustomComparisonPreview(filters: Pick<ReportsScopeFilters, "startDate" | "endDate">, customStart: string, customEnd: string): CustomComparisonPreview | null {
+  const period = getComparisonPeriod(filters, "custom", customStart, customEnd)
+  if (!period) return null
+
+  const mainStart = parse(filters.startDate, "yyyy-MM-dd", new Date())
+  const mainEnd = parse(filters.endDate, "yyyy-MM-dd", new Date())
+  const comparisonStart = parse(period.startDate, "yyyy-MM-dd", new Date())
+  const comparisonEnd = parse(period.endDate, "yyyy-MM-dd", new Date())
+  if (![mainStart, mainEnd, comparisonStart, comparisonEnd].every(isValid)) return null
+
+  return {
+    period,
+    hasDifferentLength: differenceInCalendarDays(mainEnd, mainStart) !== differenceInCalendarDays(comparisonEnd, comparisonStart),
+  }
 }
 
 function parsePageParameter(value: string | null) {
