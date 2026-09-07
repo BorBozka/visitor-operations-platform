@@ -79,7 +79,7 @@ describe("VisitTimeline current-time indicator", () => {
   it("keeps current-time lines behind visit blocks while the day badge remains visible", () => {
     expect(timelineSource).toContain("absolute inset-y-0 z-0 w-px bg-rose-500/80")
     expect(timelineSource).toContain("absolute inset-x-0 z-0 h-px bg-rose-500/90")
-    expect(timelineSource).toContain("pointer-events-none absolute right-1 z-30")
+    expect(timelineSource).toContain("pointer-events-none absolute left-0 z-30")
     expect(timelineSource).not.toContain("absolute inset-y-0 z-30 w-px bg-rose-500/80")
     expect(timelineSource).not.toContain("absolute inset-x-0 z-30 h-px bg-rose-500/90")
   })

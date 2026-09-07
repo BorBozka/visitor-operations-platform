@@ -36,7 +36,7 @@ describe("HostedMeetingEndNotifications", () => {
   it("renders the employee panel with an accessible header toggle", () => {
     vi.mocked(useVisits).mockReturnValue({ meetings: [meeting], visits: [visit], referenceData: { currentEmployee: { employeeId: "host-1" } }, reload: vi.fn() } as never)
 
-    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)
+    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)
 
     expect(markup).toContain("bottom-[14px] right-3 w-[min(244px,calc(100vw-2rem))]")
     expect(markup).toContain('max-height:calc(100dvh - 90px)')
@@ -49,7 +49,7 @@ describe("HostedMeetingEndNotifications", () => {
   it("keeps the existing maximum height outside the employee workspace", () => {
     vi.mocked(useVisits).mockReturnValue({ meetings: [meeting], visits: [visit], referenceData: { currentEmployee: { employeeId: "host-1" } }, reload: vi.fn() } as never)
 
-    expect(renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} />)).toContain('max-height:calc(100dvh - 94px)')
+    expect(renderToStaticMarkup(<HostedMeetingEndNotifications />)).toContain('max-height:calc(100dvh - 94px)')
   })
 
   it("does not render a notification when all linked Visits are terminal", () => {
@@ -60,7 +60,7 @@ describe("HostedMeetingEndNotifications", () => {
       reload: vi.fn(),
     } as never)
 
-    expect(renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} />)).toBe("")
+    expect(renderToStaticMarkup(<HostedMeetingEndNotifications />)).toBe("")
   })
 
   it("renders action-required invitations as a separate compact group", () => {
@@ -71,7 +71,7 @@ describe("HostedMeetingEndNotifications", () => {
       reload: vi.fn(),
     } as never)
 
-    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} />)
+    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications />)
 
     expect(markup).toContain("İşlem gerekenler")
     expect(markup).toContain("Davetler")
@@ -143,7 +143,7 @@ describe("HostedMeetingEndNotifications", () => {
     expect(actionsSource).toContain('absolute inset-y-0 right-2')
   })
 
-  it("drops every overlay-row tooltip and gives only the clickable overdue-meeting rows a blue left-edge hover accent", () => {
+  it("drops every overlay-row tooltip and gives every clickable row a blue left-edge hover accent", () => {
     const notificationSource = readFileSync(new URL("./HostedMeetingEndNotifications.tsx", import.meta.url), "utf8")
 
     // 1. Overlay rows attach no tooltip anywhere — the text is already fully visible.
@@ -155,11 +155,10 @@ describe("HostedMeetingEndNotifications", () => {
     expect(notificationSource).not.toContain("hover:bg-muted/50")
     expect(notificationSource).not.toContain("hover:bg-muted")
 
-    // 3. The overdue-meeting row (the only row whose whole surface is clickable) gets a blue left-edge accent only when closed.
+    // 3. The collapsed overdue-meeting row and invitation edit row both use the existing blue
+    // left-edge accent, while non-clickable states do not invent a separate hover language.
     expect(overdueRowSource).toContain('${canExpand && !isRowExpanded ? "hover:shadow-[inset_3px_0_0_hsl(var(--primary))]" : ""}')
-
-    // The non-interactive invitation row keeps no row-level hover treatment — only its own action button reacts.
-    expect(invitationRowSource).not.toContain("hover:shadow")
+    expect(invitationRowSource).toContain('hover:shadow-[inset_3px_0_0_hsl(var(--primary))]')
     expect(invitationRowSource).not.toContain("hover:border-l")
 
     // 4. The accent is never amber (amber is the panel's urgency colour).
@@ -169,13 +168,13 @@ describe("HostedMeetingEndNotifications", () => {
     const rowProps = { meeting, meetingVisits: [visit], actorEmployeeId: "host-1", now: new Date("2026-08-13T09:30:00.000Z"), scrollContainerRef: { current: null }, onExpandedChange: vi.fn(), onChanged: vi.fn().mockResolvedValue(undefined) }
     const closedOverdueRow = renderToStaticMarkup(<HostedMeetingNotificationRow {...rowProps} isExpanded={false} />)
     const openOverdueRow = renderToStaticMarkup(<HostedMeetingNotificationRow {...rowProps} isExpanded />)
-    const invitationRow = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} onAction={vi.fn()} />)
+    const invitationRow = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} status="NOT_SENT" onEdit={vi.fn()} onSend={vi.fn()} />)
 
     expect(closedOverdueRow).toContain("hover:shadow-[inset_3px_0_0_hsl(var(--primary))]")
     expect(openOverdueRow).not.toContain("hover:shadow-[inset_3px_0_0_hsl(var(--primary))]")
     expect(openOverdueRow).not.toContain("hover:bg-muted/50")
     expect(openOverdueRow).not.toContain("title=")
-    expect(invitationRow).not.toContain("hover:shadow")
+    expect(invitationRow).toContain("hover:shadow-[inset_3px_0_0_hsl(var(--primary))]")
     expect(invitationRow).not.toContain("title=")
 
     // 6 + 7. Two-band layout, actions and chevron survive.
@@ -188,7 +187,7 @@ describe("HostedMeetingEndNotifications", () => {
 
     // 8. Overlay width is 244px (matching Yaklaşan Ziyaretler).
     vi.mocked(useVisits).mockReturnValue({ meetings: [meeting], visits: [visit], referenceData: { currentEmployee: { employeeId: "host-1" } }, reload: vi.fn() } as never)
-    expect(renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)).toContain("w-[min(244px,calc(100vw-2rem))]")
+    expect(renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)).toContain("w-[min(244px,calc(100vw-2rem))]")
   })
 
   it("reports long overdue spans in hours instead of raw minutes", () => {
@@ -200,14 +199,38 @@ describe("HostedMeetingEndNotifications", () => {
   })
 
   it("uses the existing invitation action labels for not-sent and failed rows", () => {
-    const notSent = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} onAction={vi.fn()} />)
-    const failed = renderToStaticMarkup(<InvitationNotificationRow visit={{ ...invitationVisit, invitationStatus: "FAILED" }} onAction={vi.fn()} />)
+    const notSent = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} status="NOT_SENT" onSend={vi.fn()} />)
+    const failed = renderToStaticMarkup(<InvitationNotificationRow visit={{ ...invitationVisit, invitationStatus: "FAILED" }} status="FAILED" onSend={vi.fn()} />)
 
     expect(notSent).toContain("Daveti gönder")
     expect(failed).toContain("Yeniden gönder")
     expect(failed).toContain("Gönderim başarısız")
     expect(failed).toContain("text-red-700")
     expect(notSent).toContain("text-amber-800")
+  })
+
+  it("opens the visit form from the invitation row but keeps its send button isolated", () => {
+    const notificationSource = readFileSync(new URL("./HostedMeetingEndNotifications.tsx", import.meta.url), "utf8")
+    // The row opens the existing edit form; its nested send action explicitly stops propagation.
+    expect(notificationSource).toContain("useInvitationSend")
+    expect(notificationSource).toContain("onInvitationEdit(visit)")
+    expect(notificationSource).toContain('role="button" tabIndex={0}')
+    expect(notificationSource).toContain('event.key === "Enter"')
+    expect(notificationSource).toContain("event.stopPropagation(); onSend()")
+    expect(notificationSource).toContain("onSend={() => { void sendInvitation(visit.id) }}")
+
+    const onSend = vi.fn()
+    const onEdit = vi.fn()
+    const busy = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} status="SENDING" onEdit={onEdit} onSend={onSend} />)
+    const sent = renderToStaticMarkup(<InvitationNotificationRow visit={invitationVisit} status="SENT" onEdit={onEdit} onSend={onSend} />)
+
+    // Sending shows a busy, disabled button; success shows the result and drops the button.
+    expect(busy).toContain("Gönderiliyor…")
+    expect(busy).toContain("disabled")
+    expect(busy).toContain("animate-spin")
+    expect(sent).toContain("Davet gönderildi")
+    expect(sent).not.toContain("Daveti gönder")
+    expect(sent).toContain('role="button"')
   })
 
   it("selects only the current employee's not-sent and failed planned visits", () => {
@@ -253,7 +276,7 @@ describe("HostedMeetingEndNotifications", () => {
       reload: vi.fn(),
     } as never)
 
-    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)
+    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)
 
     // 1. actionCount is 2 (1 time-bound meeting + 1 invitation). Tedarikçi is NOT counted in the actionCount badge.
     expect(markup).toContain('<span class="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-200 px-1.5 text-[11px] font-bold text-amber-900">2</span>')
@@ -280,6 +303,6 @@ describe("HostedMeetingEndNotifications", () => {
       reload: vi.fn(),
     } as never)
 
-    expect(renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)).toBe("")
+    expect(renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)).toBe("")
   })
 })

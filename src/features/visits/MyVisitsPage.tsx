@@ -20,7 +20,6 @@ export function MyVisitsPage() {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [formOpen, setFormOpen] = useState(false)
   const [editingVisit, setEditingVisit] = useState<Visit | undefined>()
-  const [invitationScope, setInvitationScope] = useState<"MEETING" | "VISIT">("MEETING")
   const [viewingVisit, setViewingVisit] = useState<Visit | null>(null)
   const [reschedulingVisit, setReschedulingVisit] = useState<Visit | null>(null)
   const [cancellingVisit, setCancellingVisit] = useState<Visit | null>(null)
@@ -34,19 +33,11 @@ export function MyVisitsPage() {
 
   const openNewVisit = () => {
     setEditingVisit(undefined)
-    setInvitationScope("MEETING")
     setFormOpen(true)
   }
 
   const openEdit = (visit: Visit) => {
     setEditingVisit(visit)
-    setInvitationScope("MEETING")
-    setFormOpen(true)
-  }
-
-  const openInvitationAction = (visit: Visit) => {
-    setEditingVisit(visit)
-    setInvitationScope("VISIT")
     setFormOpen(true)
   }
 
@@ -82,7 +73,7 @@ export function MyVisitsPage() {
           onNewVisit={openNewVisit}
           fitMonthToHeight={isEmployeeView}
         />
-        <UpcomingVisits visits={ownVisits} onView={setViewingVisit} currentFacilityId={referenceData?.currentEmployee.facilityId} searchable={isEmployeeView} />
+        <UpcomingVisits visits={ownVisits} onView={setViewingVisit} currentFacilityId={referenceData?.currentEmployee.facilityId} searchable />
       </div>
 
       <VisitDetailsDialog
@@ -95,7 +86,7 @@ export function MyVisitsPage() {
         viewerRole={referenceData?.currentEmployee.role ?? "EMPLOYEE"}
         showHostEmployee={false}
       />
-      <VisitFormDialog open={formOpen} onOpenChange={setFormOpen} visit={editingVisit} invitationScope={invitationScope} onSaved={setNotice} />
+      <VisitFormDialog open={formOpen} onOpenChange={setFormOpen} visit={editingVisit} onSaved={setNotice} />
       <RescheduleVisitDialog
         visit={reschedulingVisit}
         open={Boolean(reschedulingVisit)}
@@ -108,7 +99,7 @@ export function MyVisitsPage() {
         onOpenChange={(open) => !open && setCancellingVisit(null)}
         onSaved={setNotice}
       />
-      <HostedMeetingEndNotifications onInvitationAction={openInvitationAction} isEmployeeView={isEmployeeView} />
+      <HostedMeetingEndNotifications onInvitationEdit={openEdit} isEmployeeView={isEmployeeView} />
     </div>
   )
 }

@@ -19,8 +19,11 @@ describe("MyVisitsPage workspace density", () => {
     expect(pageSource).not.toContain("zoom:0.9")
   })
 
-  it("asks the timeline to fit its month and week grids only on the employee screen", () => {
+  it("limits layout behavior to employees while keeping search enabled for every role view", () => {
     expect(pageSource).toContain("fitMonthToHeight={isEmployeeView}")
+    expect(pageSource).toContain("searchable />")
+    expect(pageSource).not.toContain("searchable={isEmployeeView}")
+    expect(pageSource).toContain("isEmployeeView={isEmployeeView}")
   })
 
   it("keeps the banners outside the scaled workspace", () => {

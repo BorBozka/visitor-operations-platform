@@ -214,7 +214,7 @@ describe("time-bound visit type actions and hover accent specifications", () => 
       reload: vi.fn(),
     } as never)
 
-    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)
+    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)
     expect(markup).toContain("Süresi aşılanlar")
     expect(markup.toLocaleLowerCase("tr-TR")).not.toContain("gecikmiş toplantılar")
 
@@ -272,7 +272,7 @@ describe("time-bound visit type actions and hover accent specifications", () => 
       reload: vi.fn(),
     } as never)
 
-    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications onInvitationAction={vi.fn()} isEmployeeView />)
+    const markup = renderToStaticMarkup(<HostedMeetingEndNotifications isEmployeeView />)
     expect(markup).toContain("Davetler")
     expect(markup).toContain("3")
     expect(markup).toContain("Tedarikçi")

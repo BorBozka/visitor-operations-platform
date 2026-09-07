@@ -1,11 +1,12 @@
-import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, ChevronUp, Clock3, MapPin } from "lucide-react"
+import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, ChevronUp, Clock3, LoaderCircle, MapPin } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
 
 import { Button } from "@/components/ui/button"
-import { isTimeBoundVisitType, type Meeting, type Visit } from "@/domain/visits"
+import { isTimeBoundVisitType, type InvitationStatus, type Meeting, type Visit } from "@/domain/visits"
 import { MeetingLifecycleActions } from "@/features/visits/MeetingLifecycleActions"
 import { getNextExpandedMeetingId } from "@/features/visits/hosted-meeting-notifications-utils"
 import { getActionRequiredInvitationVisits, getInvitationActionLabel } from "@/features/visits/invitation-status"
+import { useInvitationSend } from "@/features/visits/use-invitation-send"
 import { useVisits } from "@/features/visits/visit-context"
 import { formatMinutesDuration, formatTr } from "@/lib/date"
 import { shouldShowDifferentFacility } from "@/lib/facility-visibility"
@@ -13,12 +14,13 @@ import { getOverdueOpenHostedMeetings } from "@/lib/meeting-lifecycle"
 import { visitService } from "@/services"
 
 interface HostedMeetingEndNotificationsProps {
-  onInvitationAction(visit: Visit): void
+  onInvitationEdit?(visit: Visit): void
   isEmployeeView?: boolean
 }
 
-export function HostedMeetingEndNotifications({ onInvitationAction, isEmployeeView = false }: HostedMeetingEndNotificationsProps) {
+export function HostedMeetingEndNotifications({ onInvitationEdit = () => undefined, isEmployeeView = false }: HostedMeetingEndNotificationsProps) {
   const { meetings, visits, referenceData, reload } = useVisits()
+  const { sendInvitation, resolveStatus, sentIds } = useInvitationSend()
   const [now, setNow] = useState(() => new Date())
   const [isMinimized, setIsMinimized] = useState(false)
   const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null)
@@ -47,9 +49,16 @@ export function HostedMeetingEndNotifications({ onInvitationAction, isEmployeeVi
     () => getActionRequiredInvitationVisits(visits, actorEmployeeId),
     [actorEmployeeId, visits],
   )
+  // A freshly-sent invitation leaves the actionable set immediately; keep it on screen for a
+  // moment so its "Davet gönderildi" result is visible in place before the row clears.
+  const recentlySentInvitationVisits = useMemo(
+    () => visits.filter((visit) => sentIds.has(visit.id) && !invitationVisits.some((candidate) => candidate.id === visit.id)),
+    [invitationVisits, sentIds, visits],
+  )
+  const displayedInvitationVisits = [...invitationVisits, ...recentlySentInvitationVisits]
   const actionCount = timeBoundOverdueMeetings.length + invitationVisits.length
 
-  if (actionCount === 0 || !actorEmployeeId) return null
+  if ((actionCount === 0 && recentlySentInvitationVisits.length === 0) || !actorEmployeeId) return null
 
   if (isMinimized) {
     return (
@@ -82,18 +91,18 @@ export function HostedMeetingEndNotifications({ onInvitationAction, isEmployeeVi
             </div>
           </section>
         )}
-        {invitationVisits.length > 0 && (
+        {displayedInvitationVisits.length > 0 && (
           <section aria-labelledby="invitation-actions-heading" className={timeBoundOverdueMeetings.length > 0 ? "border-t border-slate-200" : undefined}>
             <div id="invitation-actions-heading" className="sticky top-0 z-10 flex items-center justify-between bg-slate-100 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-              <span>Davetler</span><span>{invitationVisits.length}</span>
+              <span>Davetler</span><span>{displayedInvitationVisits.length}</span>
             </div>
             <div className="divide-y divide-slate-200">
-              {invitationVisits.map((visit) => <InvitationNotificationRow key={visit.id} visit={visit} currentFacilityId={currentFacilityId} onAction={onInvitationAction} />)}
+              {displayedInvitationVisits.map((visit) => <InvitationNotificationRow key={visit.id} visit={visit} currentFacilityId={currentFacilityId} status={resolveStatus(visit)} onEdit={() => onInvitationEdit(visit)} onSend={() => { void sendInvitation(visit.id) }} />)}
             </div>
           </section>
         )}
         {untimedOverdueMeetings.length > 0 && (
-          <section aria-labelledby="untimed-meetings-heading" className={timeBoundOverdueMeetings.length > 0 || invitationVisits.length > 0 ? "border-t border-slate-200" : undefined}>
+          <section aria-labelledby="untimed-meetings-heading" className={timeBoundOverdueMeetings.length > 0 || displayedInvitationVisits.length > 0 ? "border-t border-slate-200" : undefined}>
             <div id="untimed-meetings-heading" className="sticky top-0 z-10 flex items-center justify-between bg-slate-100 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
               <span>Süresiz ziyaretler</span><span>{untimedOverdueMeetings.length}</span>
             </div>
@@ -112,18 +121,28 @@ export function HostedMeetingEndNotifications({ onInvitationAction, isEmployeeVi
 interface InvitationNotificationRowProps {
   visit: Visit
   currentFacilityId?: string
-  onAction(visit: Visit): void
+  status: InvitationStatus
+  onEdit?(): void
+  onSend(): void
 }
 
-export function InvitationNotificationRow({ visit, currentFacilityId, onAction }: InvitationNotificationRowProps) {
-  const hasFailed = visit.invitationStatus === "FAILED"
+// The button sends the invitation directly, reusing the shared send flow — it no longer opens
+// the visit form. Sending disables the button, and the result (sent / failed with retry) shows
+// in the row.
+export function InvitationNotificationRow({ visit, currentFacilityId, status, onEdit = () => undefined, onSend }: InvitationNotificationRowProps) {
+  const isSending = status === "SENDING"
+  const isSent = status === "SENT"
+  const hasFailed = status === "FAILED"
+  const statusLabel = isSent ? "Davet gönderildi" : hasFailed ? "Gönderim başarısız" : "Gönderilmedi"
+  const statusClass = isSent ? "text-emerald-700" : hasFailed ? "text-red-700" : "text-amber-800"
 
   return (
-    <article className="min-w-0 px-2 py-2">
-      <div className="min-w-0">
+    <article className="min-w-0 px-2 py-2 transition-shadow hover:shadow-[inset_3px_0_0_hsl(var(--primary))]">
+      <div role="button" tabIndex={0} className="flex min-w-0 cursor-pointer items-start gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onEdit} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); onEdit() } }} aria-label={`${visit.visitor.firstName} ${visit.visitor.lastName} ziyaretini düzenle`}>
+        <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900">{visit.visitor.firstName} {visit.visitor.lastName}</h3>
-          <span className={`shrink-0 whitespace-nowrap text-[11px] font-medium ${hasFailed ? "text-red-700" : "text-amber-800"}`}>{hasFailed ? "Gönderim başarısız" : "Gönderilmedi"}</span>
+          <span className={`shrink-0 whitespace-nowrap text-[11px] font-medium ${statusClass}`}>{statusLabel}</span>
         </div>
         <p className="mt-0.5 min-w-0 truncate text-xs text-slate-400">{visit.visitTypeName}</p>
         <div className="mt-1 flex min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap text-[11px] text-slate-600">
@@ -132,10 +151,15 @@ export function InvitationNotificationRow({ visit, currentFacilityId, onAction }
           )}
           <span className="inline-flex min-w-0 shrink items-center gap-1"><CalendarDays className="size-3 shrink-0" /><span className="min-w-0 truncate">Başlangıç {formatTr(new Date(visit.plannedStart), "d MMM · HH:mm")}</span></span>
         </div>
-        <Button type="button" variant="outline" size="sm" className="mt-2 h-7 px-2 text-[11px]" onClick={() => onAction(visit)}>
-          {getInvitationActionLabel(visit)}
-        </Button>
+        </div>
+        <ChevronRight className="mt-0.5 size-4 shrink-0 text-slate-500" aria-hidden="true" />
       </div>
+      {!isSent && (
+        <Button type="button" variant="outline" size="sm" className="mt-2 h-7 px-2 text-[11px]" onClick={(event) => { event.stopPropagation(); onSend() }} disabled={isSending}>
+          {isSending && <LoaderCircle className="mr-1 size-3 shrink-0 animate-spin" aria-hidden="true" />}
+          {isSending ? "Gönderiliyor…" : getInvitationActionLabel({ ...visit, invitationStatus: status })}
+        </Button>
+      )}
     </article>
   )
 }
