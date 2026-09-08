@@ -61,11 +61,22 @@ async function seed() {
     "bplas-otomotiv": { companyId: otomotivCompany.id, facilityId: otomotivFacility.id, departmentId: otomotivDepartment.id, gateId: "gate-bplas-otomotiv-merkez-ana-giris" },
   } as const
 
-  await prisma.visitType.upsert({
-    where: { id: "meeting" },
-    update: { name: "Toplantı", nameNormalized: "toplantı", active: true },
-    create: { id: "meeting", name: "Toplantı", nameNormalized: "toplantı", active: true },
-  })
+  const visitTypes = [
+    { id: "meeting", name: "Toplantı", nameNormalized: "toplantı" },
+    { id: "job-interview", name: "İş Görüşmesi", nameNormalized: "iş görüşmesi" },
+    { id: "training", name: "Eğitim", nameNormalized: "eğitim" },
+    { id: "customer-visit", name: "Müşteri Ziyareti", nameNormalized: "müşteri ziyareti" },
+    { id: "supplier", name: "Tedarikçi", nameNormalized: "tedarikçi" },
+    { id: "technical-service", name: "Teknik Servis / Bakım", nameNormalized: "teknik servis / bakım" },
+    { id: "audit", name: "Denetim", nameNormalized: "denetim" },
+  ] as const
+  for (const visitType of visitTypes) {
+    await prisma.visitType.upsert({
+      where: { id: visitType.id },
+      update: { name: visitType.name, nameNormalized: visitType.nameNormalized, active: true },
+      create: { ...visitType, active: true },
+    })
+  }
   await prisma.operationalSettings.upsert({
     where: { id: "default" },
     update: {},
