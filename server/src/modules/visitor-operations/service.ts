@@ -233,7 +233,10 @@ export class VisitorOperationsService {
     return result.visit
   }
   async checkOutVisit(id: string, cardReturned: boolean, ctx: AccessContext) { const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); this.requireStatus(visit, "CHECKED_IN", "Yalnızca içerideki ziyaretçiler çıkış yapabilir."); await this.repository.checkOut(id, cardReturned, this.now()); return this.requireVisit(id) }
-  listUnreturnedIssues() { return this.repository.listUnreturnedIssues() }
+  /** Unreturned-card follow-up is confined to the Security user's own company/facility scope. */
+  async listUnreturnedIssues(ctx: AccessContext) {
+    return (await this.repository.listUnreturnedIssues()).filter((issue) => scopeAllows(ctx, { companyId: issue.visit.meeting.hostCompanyId, facilityId: issue.visit.meeting.facilityId }))
+  }
   async receiveLateCardReturn(id: string, ctx: AccessContext) { const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); await this.repository.lateReturn(id, this.now()); return this.requireVisit(id) }
   async createAndCheckInUnplanned(input: CreateUnplannedInput, ctx: AccessContext) {
     const actor = await this.requireActor(ctx.userId)

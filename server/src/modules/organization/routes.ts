@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 
 import type { AuthGuards } from "../../auth/auth-guards.js"
+import { toAccessContext } from "../../lib/authorization.js"
 import { validationError } from "../../lib/api-error.js"
 import type { OrganizationKind } from "./types.js"
 import { OrganizationService } from "./service.js"
@@ -18,7 +19,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance, dependenc
   app.get("/api/organization", { preHandler: dependencies.guards.requireAuthentication }, async (request) => {
     const parsed = includeInactiveSchema.safeParse(request.query)
     if (!parsed.success) throw validationError()
-    return dependencies.service.getSnapshot(parsed.data.includeInactive)
+    return dependencies.service.getSnapshot(parsed.data.includeInactive, toAccessContext(request.currentUser!))
   })
 
   for (const kind of kindSchema.options) {
@@ -26,34 +27,34 @@ export async function registerOrganizationRoutes(app: FastifyInstance, dependenc
     app.get(path, { preHandler: dependencies.guards.requireAuthentication }, async (request) => {
       const parsed = includeInactiveSchema.safeParse(request.query)
       if (!parsed.success) throw validationError()
-      return dependencies.service.list(kind, parsed.data.includeInactive)
+      return dependencies.service.list(kind, parsed.data.includeInactive, toAccessContext(request.currentUser!))
     })
     app.get(`${path}/:id`, { preHandler: dependencies.guards.requireAuthentication }, async (request) => {
       const parsed = idSchema.safeParse(request.params)
       if (!parsed.success) throw validationError()
-      return dependencies.service.get(kind, parsed.data.id)
+      return dependencies.service.get(kind, parsed.data.id, toAccessContext(request.currentUser!))
     })
     app.post(path, { preHandler: dependencies.guards.requireRole("ADMIN") }, async (request, reply) => {
       const parsed = saveSchema.safeParse(request.body)
       if (!parsed.success) throw validationError()
-      return reply.status(201).send(await dependencies.service.save(kind, parsed.data))
+      return reply.status(201).send(await dependencies.service.save(kind, parsed.data, toAccessContext(request.currentUser!)))
     })
     app.patch(`${path}/:id`, { preHandler: dependencies.guards.requireRole("ADMIN") }, async (request) => {
       const params = idSchema.safeParse(request.params)
       const body = saveSchema.safeParse(request.body)
       if (!params.success || !body.success) throw validationError()
-      return dependencies.service.save(kind, { ...body.data, id: params.data.id })
+      return dependencies.service.save(kind, { ...body.data, id: params.data.id }, toAccessContext(request.currentUser!))
     })
   }
 
   app.get("/api/employees", { preHandler: dependencies.guards.requireAuthentication }, async (request) => {
     const parsed = employeeQuerySchema.safeParse(request.query)
     if (!parsed.success) throw validationError()
-    return dependencies.service.listEmployees(parsed.data)
+    return dependencies.service.listEmployees(parsed.data, toAccessContext(request.currentUser!))
   })
   app.get("/api/employees/:id", { preHandler: dependencies.guards.requireAuthentication }, async (request) => {
     const parsed = idSchema.safeParse(request.params)
     if (!parsed.success) throw validationError()
-    return dependencies.service.getEmployee(parsed.data.id)
+    return dependencies.service.getEmployee(parsed.data.id, toAccessContext(request.currentUser!))
   })
 }

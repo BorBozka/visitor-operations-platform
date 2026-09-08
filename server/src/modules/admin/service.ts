@@ -1,5 +1,7 @@
 import { ApiError } from "../../lib/api-error.js"
 import { normalizeIdentity } from "../../lib/names.js"
+import { isScopeWithin } from "../../lib/scope.js"
+import type { AccessContext } from "../../lib/authorization.js"
 import { hashPassword } from "../../auth/password.js"
 import type { AdminRepository, PersistedAdminUserInput } from "../../repositories/admin-repository.js"
 import type { AdminUser, AuthorizationScope, CreateAdminUserInput, UpdateAdminUserInput } from "./types.js"
@@ -7,21 +9,41 @@ import type { AdminUser, AuthorizationScope, CreateAdminUserInput, UpdateAdminUs
 function uniqueIds(values: string[]) { return [...new Set(values)] }
 function normalizedScope(scope: AuthorizationScope): AuthorizationScope { return { companyIds: uniqueIds(scope.companyIds), facilityIds: uniqueIds(scope.facilityIds), securityGateIds: uniqueIds(scope.securityGateIds) } }
 
+const outOfScopeError = () => new ApiError(403, "OUT_OF_SCOPE", "Kendi yetki kapsamınızın dışına yetki veremezsiniz.")
+
+/**
+ * User administration, bounded by the acting Admin's own assigned scope. ADMIN is *not* a global
+ * super-admin here: the acting Admin's scope is their maximum authority, so
+ *
+ * - a user account is visible/editable only when its whole scope sits inside the acting Admin's
+ *   (an account reaching further belongs to another tenant and reads as 404, never revealing that
+ *   it exists), and
+ * - any scope written — to a new user, to another user, or to the acting Admin's own account —
+ *   must itself sit inside the acting Admin's current scope, which is what stops both lateral
+ *   grants and self-escalation. Existence of the referenced ids is checked as well, but it is
+ *   never sufficient on its own.
+ *
+ * `countActiveAdmins` stays deliberately global: "at least one active Admin must remain" is a
+ * system-integrity invariant, not a per-tenant one.
+ */
 export class AdminService {
   constructor(private readonly repository: AdminRepository) {}
 
-  listUsers() { return this.repository.listUsers() }
-  async getUser(id: string) { return this.requireUser(id) }
+  async listUsers(ctx: AccessContext) {
+    return (await this.repository.listUsers()).filter((user) => isScopeWithin(user.authorizationScope, ctx.scope))
+  }
+  async getUser(id: string, ctx: AccessContext) { return this.requireUser(id, ctx) }
 
-  async createUser(input: CreateAdminUserInput): Promise<AdminUser> {
+  async createUser(input: CreateAdminUserInput, ctx: AccessContext): Promise<AdminUser> {
     const user = this.validateCreate(input)
     await this.assertIdentityAvailable(user.usernameNormalized, user.emailNormalized)
-    await this.validateScope(input.role, input.authorizationScope)
+    await this.validateScope(input.role, input.authorizationScope, ctx)
     return this.repository.createLocalUser({ ...user, passwordHash: await hashPassword(input.password), scope: normalizedScope(input.authorizationScope) })
   }
 
-  async updateUser(id: string, input: UpdateAdminUserInput, actingUserId: string): Promise<AdminUser> {
-    const existing = await this.requireUser(id)
+  async updateUser(id: string, input: UpdateAdminUserInput, ctx: AccessContext): Promise<AdminUser> {
+    const actingUserId = ctx.userId
+    const existing = await this.requireUser(id, ctx)
     const next = { fullName: input.fullName?.trim() ?? existing.fullName, username: input.username?.trim() ?? existing.username, email: input.email?.trim() ?? existing.email, role: input.role ?? existing.role, active: input.active ?? existing.active, authorizationScope: input.authorizationScope ?? existing.authorizationScope }
     if (!next.fullName || !next.username || !next.email) throw new ApiError(400, "VALIDATION_ERROR", "Ad soyad, kullanıcı adı ve e-posta zorunludur.")
     if (existing.authenticationSource === "ACTIVE_DIRECTORY" && (input.fullName !== undefined || input.username !== undefined || input.email !== undefined)) throw new ApiError(409, "IDENTITY_MANAGED_EXTERNALLY", "Active Directory kullanıcılarının kimlik alanları düzenlenemez.")
@@ -31,14 +53,14 @@ export class AdminService {
     const usernameNormalized = normalizeIdentity(next.username)
     const emailNormalized = normalizeIdentity(next.email)
     await this.assertIdentityAvailable(usernameNormalized, emailNormalized, id)
-    await this.validateScope(next.role, next.authorizationScope)
+    await this.validateScope(next.role, next.authorizationScope, ctx)
     const persisted: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope } = { role: next.role, active: next.active, scope: normalizedScope(next.authorizationScope) }
     if (existing.authenticationSource === "LOCAL") Object.assign(persisted, { fullName: next.fullName, username: next.username, usernameNormalized, email: next.email, emailNormalized })
     return this.repository.updateUser(id, persisted)
   }
 
-  async resetLocalUserPassword(id: string, password: string): Promise<void> {
-    const user = await this.requireUser(id)
+  async resetLocalUserPassword(id: string, password: string, ctx: AccessContext): Promise<void> {
+    const user = await this.requireUser(id, ctx)
     if (user.authenticationSource !== "LOCAL") throw new ApiError(409, "LOCAL_AUTH_REQUIRED", "Active Directory kullanıcıları için parola sıfırlama desteklenmiyor.")
     if (password.length < 8) throw new ApiError(400, "VALIDATION_ERROR", "Geçici parola en az sekiz karakter olmalıdır.")
     await this.repository.updatePasswordHash(id, await hashPassword(password))
@@ -56,14 +78,22 @@ export class AdminService {
     if (email && email.id !== excludeId) throw new ApiError(409, "EMAIL_TAKEN", "Bu e-posta adresi zaten kullanılıyor.")
   }
 
-  private async validateScope(role: AdminUser["role"], scope: AuthorizationScope) {
+  private async validateScope(role: AdminUser["role"], scope: AuthorizationScope, ctx: AccessContext) {
     const normalized = normalizedScope(scope)
     if (normalized.companyIds.length === 0) throw new ApiError(400, "VALIDATION_ERROR", "En az bir şirket kapsamı seçilmelidir.")
+    // Existence alone is not authority: the scope being written must also sit inside the acting
+    // Admin's own, so it can never reach a company/facility/gate they do not themselves hold.
+    if (!isScopeWithin(normalized, ctx.scope)) throw outOfScopeError()
     const found = await this.repository.findScopeReferences(normalized)
     if (found.companyIds.length !== normalized.companyIds.length || found.facilities.length !== normalized.facilityIds.length || found.gates.length !== normalized.securityGateIds.length) throw new ApiError(400, "INVALID_SCOPE", "Kapsamda bilinmeyen organizasyon kaydı bulunuyor.")
     if (found.facilities.some((facility) => !normalized.companyIds.includes(facility.companyId)) || found.gates.some((gate) => !normalized.companyIds.includes(gate.companyId))) throw new ApiError(400, "INVALID_SCOPE", "Tesis ve güvenlik kapısı kapsamı seçili şirket kapsamıyla uyumlu olmalıdır.")
     void role
   }
 
-  private async requireUser(id: string) { const user = await this.repository.findUser(id); if (!user) throw new ApiError(404, "NOT_FOUND", "Kullanıcı bulunamadı."); return user }
+  /** An account outside the acting Admin's authority is reported as absent, never as forbidden. */
+  private async requireUser(id: string, ctx: AccessContext) {
+    const user = await this.repository.findUser(id)
+    if (!user || !isScopeWithin(user.authorizationScope, ctx.scope)) throw new ApiError(404, "NOT_FOUND", "Kullanıcı bulunamadı.")
+    return user
+  }
 }
