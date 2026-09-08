@@ -55,7 +55,6 @@ export class InMemoryAdminRepository implements AdminRepository {
     else if (nextEmployee) { this.employeeSequence += 1; this.employees.push(nextEmployee) }
     return clone(next)
   }
-  async updatePasswordHash(id: string, passwordHash: string) { if (!this.users.some((user) => user.id === id)) throw new Error("User not found"); this.passwordHashes.set(id, passwordHash) }
   async findScopeReferences(scope: AuthorizationScope) { return { companyIds: this.references.companyIds.filter((id) => scope.companyIds.includes(id)), facilities: this.references.facilities.filter((item) => scope.facilityIds.includes(item.id)), gates: this.references.gates.filter((item) => scope.securityGateIds.includes(item.id)) } }
   failNextEmployeeCreation(error = new Error("Employee creation failed")) { this.employeeCreationFailure = error }
 

@@ -2,6 +2,7 @@ import Fastify from "fastify"
 import { afterEach, describe, expect, it } from "vitest"
 
 import type { AuthGuards } from "../../auth/auth-guards.js"
+import { InMemoryAuthRepository } from "../../auth/testing/in-memory-auth-repository.js"
 import type { SessionUser } from "../../auth/auth-types.js"
 import type { EmailSender } from "../../delivery/email-sender.js"
 import { ApiError, forbiddenError, unauthorizedError } from "../../lib/api-error.js"
@@ -74,7 +75,7 @@ async function createApp() {
   const app = Fastify()
   apps.push(app)
   app.decorateRequest("currentUser", null)
-  await registerAdminRoutes(app, { service: new AdminService(repository), guards })
+  await registerAdminRoutes(app, { service: new AdminService(repository, new InMemoryAuthRepository()), guards })
   const emailSender: EmailSender = { send: async () => undefined }
   await registerVisitorOperationsRoutes(app, { service: new VisitorOperationsService(visitorRepository, emailSender, "https://web.example.test", undefined, () => new Date(timestamp)), guards })
   app.setErrorHandler((error, _request, reply) => error instanceof ApiError ? reply.status(error.statusCode).send({ error: { code: error.code, message: error.message } }) : reply.status(500).send({ error: { code: "INTERNAL_ERROR" } }))

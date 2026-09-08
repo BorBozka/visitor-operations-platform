@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client"
 
 import { parseApplicationRole, parseAuthenticationSource, type AuthUserRecord, type SessionRecord, type SessionWithUser } from "../auth/auth-types.js"
-import type { AuthRepository, CreateSessionInput } from "./auth-repository.js"
+import type { AuthRepository, CreateSessionInput, UpdatePasswordAndRevokeSessionsInput } from "./auth-repository.js"
 
 const userSelect = {
   id: true,
@@ -75,8 +75,18 @@ export class PrismaAuthRepository implements AuthRepository {
     return user ? toUserRecord(user) : null
   }
 
-  async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {
-    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } })
+  async updatePasswordAndRevokeSessions(input: UpdatePasswordAndRevokeSessionsInput): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.user.update({ where: { id: input.userId }, data: { passwordHash: input.passwordHash } })
+      await transaction.session.updateMany({
+        where: {
+          userId: input.userId,
+          revokedAt: null,
+          ...(input.exceptSessionTokenHash ? { tokenHash: { not: input.exceptSessionTokenHash } } : {}),
+        },
+        data: { revokedAt: input.revokedAt },
+      })
+    }, { isolationLevel: "Serializable" })
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionRecord> {

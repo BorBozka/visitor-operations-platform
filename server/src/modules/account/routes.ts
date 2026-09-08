@@ -10,13 +10,18 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8).max(1_024),
 }).strict()
 
-export async function registerAccountRoutes(app: FastifyInstance, dependencies: { authService: AuthService; guards: AuthGuards }): Promise<void> {
+export async function registerAccountRoutes(app: FastifyInstance, dependencies: { authService: AuthService; guards: AuthGuards; sessionCookieName: string }): Promise<void> {
   app.post("/api/account/change-password", { preHandler: dependencies.guards.requireAuthentication }, async (request, reply) => {
     const parsed = changePasswordSchema.safeParse(request.body)
     if (!parsed.success) throw validationError()
 
     try {
-      await dependencies.authService.changePassword(request.currentUser!.id, parsed.data.currentPassword, parsed.data.newPassword)
+      await dependencies.authService.changePassword(
+        request.currentUser!.id,
+        parsed.data.currentPassword,
+        parsed.data.newPassword,
+        request.cookies[dependencies.sessionCookieName]!,
+      )
     } catch (error) {
       if (error instanceof Error && error.message === "CURRENT_PASSWORD_INVALID") {
         throw new ApiError(400, "CURRENT_PASSWORD_INVALID", "Mevcut şifre hatalı.")

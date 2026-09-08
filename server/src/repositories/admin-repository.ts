@@ -26,6 +26,5 @@ export interface AdminRepository {
   countActiveAdmins(excludeUserId?: string): Promise<number>
   createLocalUser(input: PersistedAdminUserInput & { scope: AuthorizationScope }): Promise<AdminUser>
   updateUser(id: string, input: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope }): Promise<AdminUser>
-  updatePasswordHash(id: string, passwordHash: string): Promise<void>
   findScopeReferences(scope: AuthorizationScope): Promise<{ companyIds: string[]; facilities: { id: string; companyId: string }[]; gates: { id: string; facilityId: string; companyId: string }[] }>
 }

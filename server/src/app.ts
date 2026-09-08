@@ -72,10 +72,10 @@ export async function buildApp(config: AppConfig, dependencies: AppDependencies)
 
   const guards = createAuthGuards(authService, config)
   await registerAuthRoutes(app, { authService, config })
-  await registerAccountRoutes(app, { authService, guards })
+  await registerAccountRoutes(app, { authService, guards, sessionCookieName: config.sessionCookieName })
   await registerHealthRoutes(app, dependencies.checkDatabase ?? (async () => undefined))
   if (dependencies.organizationRepository) await registerOrganizationRoutes(app, { service: new OrganizationService(dependencies.organizationRepository), guards })
-  if (dependencies.adminRepository) await registerAdminRoutes(app, { service: new AdminService(dependencies.adminRepository), guards })
+  if (dependencies.adminRepository) await registerAdminRoutes(app, { service: new AdminService(dependencies.adminRepository, dependencies.authRepository), guards })
   if (dependencies.settingsRepository) await registerSettingsRoutes(app, { service: new SettingsService(dependencies.settingsRepository), guards })
   if (dependencies.resourceRepository) await registerResourceRoutes(app, { service: new ResourceService(dependencies.resourceRepository), guards })
   if (dependencies.visitorOperationsRepository && dependencies.emailSender) {

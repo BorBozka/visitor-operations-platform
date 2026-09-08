@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
 
+import { AuthService } from "../../auth/auth-service.js"
+import { hashPassword } from "../../auth/password.js"
+import type { AuthUserRecord } from "../../auth/auth-types.js"
+import { InMemoryAuthRepository } from "../../auth/testing/in-memory-auth-repository.js"
 import type { AccessContext } from "../../lib/authorization.js"
 import { AdminService } from "./service.js"
 import { InMemoryAdminRepository } from "./testing/in-memory-admin-repository.js"
@@ -13,11 +17,12 @@ const ACTING = context(admin.id)
 const OTHER_ADMIN = context("another-admin")
 const operationalScope: AuthorizationScope = { companyIds: ["company-1"], facilityIds: ["facility-1"], securityGateIds: [] }
 const createInput = (role: ApplicationRole, suffix: string, authorizationScope = operationalScope): CreateAdminUserInput => ({ fullName: `Yeni ${role}`, username: `yeni-${suffix}`, email: `yeni-${suffix}@example.com`, password: "temporary-password", role, active: true, authorizationScope })
+const createService = (repository: InMemoryAdminRepository, authRepository = new InMemoryAuthRepository()) => new AdminService(repository, authRepository)
 
 describe("AdminService", () => {
   it("creates LOCAL users only and writes their validated scopes", async () => {
     const repository = new InMemoryAdminRepository([admin], references)
-    const service = new AdminService(repository)
+    const service = createService(repository)
     const user = await service.createUser({ fullName: "Yeni Kullanıcı", username: "yeni", email: "yeni@example.com", password: "temporary-password", role: "SECURITY", active: true, authorizationScope: { companyIds: ["company-1", "company-1"], facilityIds: ["facility-1"], securityGateIds: ["gate-1"] } }, ACTING)
     expect(user.authenticationSource).toBe("LOCAL")
     expect(user.authorizationScope).toEqual({ companyIds: ["company-1"], facilityIds: ["facility-1"], securityGateIds: ["gate-1"] })
@@ -26,13 +31,13 @@ describe("AdminService", () => {
 
   it.each(["EMPLOYEE", "MANAGER", "SECURITY"] as const)("creates an Employee profile for %s", async (role) => {
     const repository = new InMemoryAdminRepository([admin], references)
-    const user = await new AdminService(repository).createUser(createInput(role, role.toLowerCase()), ACTING)
+    const user = await createService(repository).createUser(createInput(role, role.toLowerCase()), ACTING)
     expect(await repository.findEmployeeProfileByUserId(user.id)).toMatchObject({ userId: user.id, companyId: "company-1", facilityIds: ["facility-1"] })
   })
 
   it("keeps a pure Admin account free of an Employee profile", async () => {
     const repository = new InMemoryAdminRepository([admin], references)
-    const user = await new AdminService(repository).createUser(createInput("ADMIN", "admin", { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }), ACTING)
+    const user = await createService(repository).createUser(createInput("ADMIN", "admin", { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }), ACTING)
     expect(await repository.findEmployeeProfileByUserId(user.id)).toBeNull()
   })
 
@@ -40,21 +45,21 @@ describe("AdminService", () => {
     { facilityIds: [], label: "missing" },
     { facilityIds: ["facility-1", "facility-2"], label: "multiple" },
   ])("rejects $label facility scope for an Employee-requiring role", async ({ facilityIds }) => {
-    const service = new AdminService(new InMemoryAdminRepository([admin], references))
+    const service = createService(new InMemoryAdminRepository([admin], references))
     await expect(service.createUser(createInput("EMPLOYEE", facilityIds.length.toString(), { ...operationalScope, facilityIds }), ACTING)).rejects.toMatchObject({ statusCode: 400, code: "EMPLOYEE_FACILITY_SCOPE_REQUIRED" })
   })
 
   it("rolls User creation back when Employee creation fails", async () => {
     const repository = new InMemoryAdminRepository([admin], references)
     repository.failNextEmployeeCreation()
-    const service = new AdminService(repository)
+    const service = createService(repository)
     await expect(service.createUser(createInput("EMPLOYEE", "rollback"), ACTING)).rejects.toThrow("Employee creation failed")
     expect(await repository.findUserByUsernameNormalized("yeni-rollback")).toBeNull()
   })
 
   it("creates, preserves and retires one Employee identity across role transitions", async () => {
     const repository = new InMemoryAdminRepository([admin], references)
-    const service = new AdminService(repository)
+    const service = createService(repository)
     const target = await service.createUser(createInput("ADMIN", "transition", { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }), ACTING)
 
     await service.updateUser(target.id, { role: "EMPLOYEE", authorizationScope: operationalScope }, ACTING)
@@ -69,13 +74,34 @@ describe("AdminService", () => {
   })
 
   it("rejects out-of-company scope assignments and the last active Admin's deactivation", async () => {
-    const service = new AdminService(new InMemoryAdminRepository([admin], references))
+    const service = createService(new InMemoryAdminRepository([admin], references))
     await expect(service.updateUser(admin.id, { authorizationScope: { companyIds: ["company-1"], facilityIds: [], securityGateIds: ["missing"] } }, OTHER_ADMIN)).rejects.toMatchObject({ code: "INVALID_SCOPE" })
     await expect(service.updateUser(admin.id, { active: false }, OTHER_ADMIN)).rejects.toMatchObject({ code: "LAST_ACTIVE_ADMIN" })
   })
 
   it("prevents self-demotion", async () => {
-    const service = new AdminService(new InMemoryAdminRepository([admin], references))
+    const service = createService(new InMemoryAdminRepository([admin], references))
     await expect(service.updateUser(admin.id, { role: "MANAGER" }, ACTING)).rejects.toMatchObject({ code: "SELF_ADMIN_DEMOTION" })
+  })
+
+  it("resets a LOCAL password and revokes every active session for the target user", async () => {
+    const target = { ...admin, id: "target-1", username: "target", email: "target@example.com", role: "EMPLOYEE" as const, authorizationScope: operationalScope }
+    const passwordHash = await hashPassword("old-password")
+    const authUser: AuthUserRecord = { ...target, passwordHash, employeeId: "employee-target" }
+    const authRepository = new InMemoryAuthRepository([authUser])
+    const authService = new AuthService(authRepository, {
+      sessionTtlHours: 8,
+      createToken: (() => { const tokens = ["target-session-a", "target-session-b", "target-session-new"]; let index = 0; return () => tokens[index++] })(),
+    })
+    const sessionA = await authService.login("target", "old-password")
+    const sessionB = await authService.login("target", "old-password")
+    const service = createService(new InMemoryAdminRepository([admin, target], references), authRepository)
+
+    await service.resetLocalUserPassword(target.id, "new-password", ACTING)
+
+    await expect(authService.getCurrentSession(sessionA.rawSessionToken)).resolves.toBeNull()
+    await expect(authService.getCurrentSession(sessionB.rawSessionToken)).resolves.toBeNull()
+    await expect(authService.login("target", "old-password")).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" })
+    await expect(authService.login("target", "new-password")).resolves.toMatchObject({ user: { id: target.id } })
   })
 })

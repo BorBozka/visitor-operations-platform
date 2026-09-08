@@ -22,8 +22,9 @@ async function createUser(overrides: Partial<AuthUserRecord> = {}): Promise<Auth
   }
 }
 
-function createService(repository: InMemoryAuthRepository, now: () => Date) {
-  return new AuthService(repository, { sessionTtlHours: 8, now, createToken: () => "raw-session-token" })
+function createService(repository: InMemoryAuthRepository, now: () => Date, tokens = ["raw-session-token"]) {
+  let tokenIndex = 0
+  return new AuthService(repository, { sessionTtlHours: 8, now, createToken: () => tokens[tokenIndex++] ?? `raw-session-token-${tokenIndex}` })
 }
 
 describe("password hashing", () => {
@@ -77,13 +78,49 @@ describe("AuthService", () => {
     expect([...repository.sessions.values()].some((session) => session.revokedAt !== null)).toBe(true)
   })
 
-  it("requires the real current password and persists a new Argon2id hash", async () => {
+  it("keeps the current session, revokes the user's other sessions, and replaces the login password", async () => {
     const repository = new InMemoryAuthRepository([await createUser()])
-    const service = createService(repository, () => new Date())
+    const service = createService(repository, () => new Date(), ["session-a", "session-b", "session-new"])
+    const sessionA = await service.login("calisan", "calisan")
+    const sessionB = await service.login("calisan", "calisan")
 
-    await expect(service.changePassword("user-1", "wrong", "yeni-parola")).rejects.toThrow("CURRENT_PASSWORD_INVALID")
-    await expect(service.changePassword("user-1", "calisan", "calisan")).rejects.toBeInstanceOf(ApiError)
-    await service.changePassword("user-1", "calisan", "yeni-parola")
+    await service.changePassword("user-1", "calisan", "yeni-parola", sessionA.rawSessionToken)
+
+    await expect(service.getCurrentSession(sessionA.rawSessionToken)).resolves.toMatchObject({ id: "user-1" })
+    await expect(service.getCurrentSession(sessionB.rawSessionToken)).resolves.toBeNull()
+    await expect(service.login("calisan", "calisan")).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" })
     await expect(service.login("calisan", "yeni-parola")).resolves.toMatchObject({ user: { id: "user-1" } })
+  })
+
+  it("leaves the password and every session unchanged when the current password is wrong", async () => {
+    const repository = new InMemoryAuthRepository([await createUser()])
+    const service = createService(repository, () => new Date(), ["session-a", "session-b"])
+    const sessionA = await service.login("calisan", "calisan")
+    const sessionB = await service.login("calisan", "calisan")
+    const originalHash = repository.users.get("user-1")!.passwordHash
+
+    await expect(service.changePassword("user-1", "wrong", "yeni-parola", sessionA.rawSessionToken)).rejects.toThrow("CURRENT_PASSWORD_INVALID")
+    expect(repository.users.get("user-1")!.passwordHash).toBe(originalHash)
+    await expect(service.getCurrentSession(sessionA.rawSessionToken)).resolves.toMatchObject({ id: "user-1" })
+    await expect(service.getCurrentSession(sessionB.rawSessionToken)).resolves.toMatchObject({ id: "user-1" })
+    await expect(service.changePassword("user-1", "calisan", "calisan", sessionA.rawSessionToken)).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it.each([
+    { stage: "password update", fail: (repository: InMemoryAuthRepository) => repository.failNextPasswordUpdate() },
+    { stage: "session revoke", fail: (repository: InMemoryAuthRepository) => repository.failNextSessionRevoke() },
+  ])("leaves no partial security state when $stage fails", async ({ fail }) => {
+    const repository = new InMemoryAuthRepository([await createUser()])
+    const service = createService(repository, () => new Date(), ["session-a", "session-b"])
+    const sessionA = await service.login("calisan", "calisan")
+    const sessionB = await service.login("calisan", "calisan")
+    fail(repository)
+
+    await expect(service.changePassword("user-1", "calisan", "yeni-parola", sessionA.rawSessionToken)).rejects.toThrow()
+
+    await expect(verifyPassword(repository.users.get("user-1")!.passwordHash!, "calisan")).resolves.toBe(true)
+    await expect(verifyPassword(repository.users.get("user-1")!.passwordHash!, "yeni-parola")).resolves.toBe(false)
+    await expect(service.getCurrentSession(sessionA.rawSessionToken)).resolves.toMatchObject({ id: "user-1" })
+    await expect(service.getCurrentSession(sessionB.rawSessionToken)).resolves.toMatchObject({ id: "user-1" })
   })
 })

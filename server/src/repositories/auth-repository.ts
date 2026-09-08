@@ -7,11 +7,18 @@ export interface CreateSessionInput {
   expiresAt: Date
 }
 
+export interface UpdatePasswordAndRevokeSessionsInput {
+  userId: string
+  passwordHash: string
+  revokedAt: Date
+  exceptSessionTokenHash?: string
+}
+
 /** Authentication's persistence boundary. Services remain unit-testable without MSSQL. */
 export interface AuthRepository {
   findUserByUsernameNormalized(usernameNormalized: string): Promise<AuthUserRecord | null>
   findUserById(id: string): Promise<AuthUserRecord | null>
-  updatePasswordHash(userId: string, passwordHash: string): Promise<void>
+  updatePasswordAndRevokeSessions(input: UpdatePasswordAndRevokeSessionsInput): Promise<void>
   createSession(input: CreateSessionInput): Promise<SessionRecord>
   findSessionByTokenHash(tokenHash: string): Promise<SessionWithUser | null>
   touchSession(tokenHash: string, usedAt: Date): Promise<void>

@@ -62,11 +62,16 @@ export class AuthService {
     await this.repository.revokeSessionByTokenHash(hashSessionToken(rawSessionToken), this.now())
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  async changePassword(userId: string, currentPassword: string, newPassword: string, currentRawSessionToken: string): Promise<void> {
     if (!currentPassword || !newPassword || newPassword.length < 8 || newPassword === currentPassword) throw validationError()
     const user = await this.repository.findUserById(userId)
     if (!user || user.authenticationSource !== "LOCAL" || !user.active || !user.passwordHash) throw invalidCredentialsError()
     if (!await verifyPassword(user.passwordHash, currentPassword)) throw new Error("CURRENT_PASSWORD_INVALID")
-    await this.repository.updatePasswordHash(user.id, await hashPassword(newPassword))
+    await this.repository.updatePasswordAndRevokeSessions({
+      userId: user.id,
+      passwordHash: await hashPassword(newPassword),
+      revokedAt: this.now(),
+      exceptSessionTokenHash: hashSessionToken(currentRawSessionToken),
+    })
   }
 }

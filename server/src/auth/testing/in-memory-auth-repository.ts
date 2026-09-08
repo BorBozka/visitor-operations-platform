@@ -1,10 +1,11 @@
 import type { AuthUserRecord, SessionRecord, SessionWithUser } from "../auth-types.js"
-import type { AuthRepository, CreateSessionInput } from "../../repositories/auth-repository.js"
+import type { AuthRepository, CreateSessionInput, UpdatePasswordAndRevokeSessionsInput } from "../../repositories/auth-repository.js"
 
 export class InMemoryAuthRepository implements AuthRepository {
   readonly users = new Map<string, AuthUserRecord>()
   readonly sessions = new Map<string, SessionRecord>()
   private sequence = 0
+  private passwordSessionFailure: "password" | "revoke" | null = null
 
   constructor(users: AuthUserRecord[] = []) {
     users.forEach((user) => this.users.set(user.id, { ...user }))
@@ -20,10 +21,29 @@ export class InMemoryAuthRepository implements AuthRepository {
     return user ? { ...user } : null
   }
 
-  async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {
-    const user = this.users.get(userId)
+  async updatePasswordAndRevokeSessions(input: UpdatePasswordAndRevokeSessionsInput): Promise<void> {
+    const user = this.users.get(input.userId)
     if (!user) throw new Error("User not found")
-    this.users.set(userId, { ...user, passwordHash })
+    if (this.passwordSessionFailure === "password") {
+      this.passwordSessionFailure = null
+      throw new Error("Password update failed")
+    }
+
+    const nextUser = { ...user, passwordHash: input.passwordHash }
+    const nextSessions = new Map(this.sessions)
+    for (const [tokenHash, session] of nextSessions) {
+      if (session.userId === input.userId && !session.revokedAt && tokenHash !== input.exceptSessionTokenHash) {
+        nextSessions.set(tokenHash, { ...session, revokedAt: input.revokedAt })
+      }
+    }
+    if (this.passwordSessionFailure === "revoke") {
+      this.passwordSessionFailure = null
+      throw new Error("Session revoke failed")
+    }
+
+    this.users.set(input.userId, nextUser)
+    this.sessions.clear()
+    nextSessions.forEach((session, tokenHash) => this.sessions.set(tokenHash, session))
   }
 
   async createSession(input: CreateSessionInput): Promise<SessionRecord> {
@@ -47,4 +67,7 @@ export class InMemoryAuthRepository implements AuthRepository {
     const session = this.sessions.get(tokenHash)
     if (session && !session.revokedAt) this.sessions.set(tokenHash, { ...session, revokedAt })
   }
+
+  failNextPasswordUpdate(): void { this.passwordSessionFailure = "password" }
+  failNextSessionRevoke(): void { this.passwordSessionFailure = "revoke" }
 }

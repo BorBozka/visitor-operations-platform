@@ -69,7 +69,6 @@ export class PrismaAdminRepository implements AdminRepository {
     }, { isolationLevel: "Serializable" })
     return toUser(row)
   }
-  async updatePasswordHash(id: string, passwordHash: string) { await this.prisma.user.update({ where: { id }, data: { passwordHash } }) }
   async findScopeReferences(scope: AuthorizationScope) {
     const [companies, facilities, gates] = await Promise.all([this.prisma.company.findMany({ where: { id: { in: scope.companyIds } }, select: { id: true } }), this.prisma.facility.findMany({ where: { id: { in: scope.facilityIds } }, select: { id: true, companyId: true } }), this.prisma.securityGate.findMany({ where: { id: { in: scope.securityGateIds } }, select: { id: true, facilityId: true, facility: { select: { companyId: true } } } })])
     return { companyIds: companies.map((item) => item.id), facilities, gates: gates.map((item) => ({ id: item.id, facilityId: item.facilityId, companyId: item.facility.companyId })) }

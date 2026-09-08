@@ -3,6 +3,7 @@ import { normalizeIdentity } from "../../lib/names.js"
 import { isScopeWithin } from "../../lib/scope.js"
 import type { AccessContext } from "../../lib/authorization.js"
 import { hashPassword } from "../../auth/password.js"
+import type { AuthRepository } from "../../repositories/auth-repository.js"
 import { EmployeeProvisioningScopeError, type AdminRepository, type PersistedAdminUserInput } from "../../repositories/admin-repository.js"
 import { roleRequiresEmployeeProfile, type AdminUser, type AuthorizationScope, type CreateAdminUserInput, type UpdateAdminUserInput } from "./types.js"
 
@@ -27,7 +28,11 @@ const outOfScopeError = () => new ApiError(403, "OUT_OF_SCOPE", "Kendi yetki kap
  * system-integrity invariant, not a per-tenant one.
  */
 export class AdminService {
-  constructor(private readonly repository: AdminRepository) {}
+  constructor(
+    private readonly repository: AdminRepository,
+    private readonly authRepository: AuthRepository,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   async listUsers(ctx: AccessContext) {
     return (await this.repository.listUsers()).filter((user) => isScopeWithin(user.authorizationScope, ctx.scope))
@@ -64,7 +69,11 @@ export class AdminService {
     const user = await this.requireUser(id, ctx)
     if (user.authenticationSource !== "LOCAL") throw new ApiError(409, "LOCAL_AUTH_REQUIRED", "Active Directory kullanıcıları için parola sıfırlama desteklenmiyor.")
     if (password.length < 8) throw new ApiError(400, "VALIDATION_ERROR", "Geçici parola en az sekiz karakter olmalıdır.")
-    await this.repository.updatePasswordHash(id, await hashPassword(password))
+    await this.authRepository.updatePasswordAndRevokeSessions({
+      userId: id,
+      passwordHash: await hashPassword(password),
+      revokedAt: this.now(),
+    })
   }
 
   private validateCreate(input: CreateAdminUserInput): Omit<PersistedAdminUserInput, "passwordHash"> {
