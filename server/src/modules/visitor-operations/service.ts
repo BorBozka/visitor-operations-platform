@@ -5,6 +5,7 @@ import { consoleDeliveryLogger } from "../../delivery/email-sender.js"
 import { ApiError } from "../../lib/api-error.js"
 import { scopeAllows, type AccessContext } from "../../lib/authorization.js"
 import { CheckInConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import type {
   CreateUnplannedInput, MeetingDto, MeetingInput, PublicPreRegistrationDto, SecurityCheckInInput,
   SecurityCorrectionInput, VisitDto,
@@ -104,6 +105,7 @@ export class VisitorOperationsService {
     assertMeetingMutable(ctx, current.meeting)
     if (!scopeAllows(ctx, { companyId: input.hostCompanyId, facilityId: input.facilityId })) throw mutationForbidden()
     if (current.meeting.actualMeetingEnd) throw new ApiError(409, "MEETING_CLOSED", "Kapatılmış bir toplantı düzenlenemez.")
+    assertMeetingPlanningUnlocked(current.visits.map((visit) => visit.status))
     const submittedIds = input.visitors.flatMap((visitor) => visitor.visitId ? [visitor.visitId] : [])
     if (new Set(submittedIds).size !== submittedIds.length || submittedIds.some((visitId) => !current.visits.some((visit) => visit.id === visitId))) throw new ApiError(400, "VALIDATION_ERROR", "Ziyaret grubu dışındaki veya yinelenen ziyaret kayıtları gönderilemez.")
     const validated = await this.validateMeetingInput(input, current.meeting.visitTypeId)
@@ -116,6 +118,9 @@ export class VisitorOperationsService {
     this.requireStatus(visit, "PLANNED", "Yalnızca planlanmış ziyaret yeniden planlanabilir.")
     this.assertTimes(input.plannedStart, input.plannedEnd)
     if (visit.meeting.actualMeetingEnd) throw new ApiError(409, "MEETING_CLOSED", "Kapatılmış bir toplantı yeniden planlanamaz.")
+    // Reschedule moves the Meeting's shared time window, not just this visitor's plan.
+    const group = await this.getMeeting(visit.meetingId)
+    assertMeetingPlanningUnlocked(group.visits.map((item) => item.status))
     await this.repository.updateMeetingTimes(visit.meetingId, new Date(input.plannedStart), new Date(input.plannedEnd))
     return this.requireVisit(id)
   }

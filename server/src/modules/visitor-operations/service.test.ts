@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from "vitest"
 import type { AccessContext } from "../../lib/authorization.js"
 import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
 import { CheckInConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
-import type { MeetingDto, VisitDto } from "./types.js"
+import type { MeetingDto, MeetingInput, VisitDto, VisitStatus } from "./types.js"
 
 const now = new Date("2026-09-02T10:00:00.000Z")
 const scope = { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }
@@ -92,6 +93,7 @@ describe("VisitorOperationsService invitations", () => {
     const repository = unusedRepository({
       findEmployeeByUserId: async () => ({ id: "employee-1", userId: "user-1", fullName: "Ada", companyId: "company-1", facilityIds: ["facility-1"] }),
       findVisit: async () => current,
+      findMeeting: async () => ({ meeting, visits: [current] }),
       updateMeetingTimes: async (_id: string, plannedStart: Date, plannedEnd: Date) => {
         current = { ...current, invitationStatus: "NOT_SENT", invitationSentAt: undefined, invitationError: undefined, meeting: { ...current.meeting, plannedStart: plannedStart.toISOString(), plannedEnd: plannedEnd.toISOString() } }
       },
@@ -170,5 +172,99 @@ describe("Visitor operations state guards", () => {
     const service = new VisitorOperationsService(repository, email, "https://web.example.test", undefined, () => now)
     await expect(service.markCardLost("card-1")).resolves.toMatchObject({ status: "LOST" })
     expect(setStatus).toHaveBeenCalledWith("card-1", "LOST")
+  })
+})
+
+describe("Meeting shared planning invariant", () => {
+  const host = { id: "host-1", userId: "host-user", fullName: "Maya Kara", companyId: "company-1", facilityIds: ["facility-1"] }
+  const visitType = { id: "type-1", name: "Toplantı", active: true, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+  const lockingStatuses: VisitStatus[] = ["CHECKED_IN", "CHECKED_OUT", "CANCELLED", "NO_SHOW"]
+  const editInput: MeetingInput = {
+    visitors: [
+      { visitId: "visit-1", firstName: "Ada", lastName: "Yılmaz", email: "ada@example.test", company: "Acme" },
+      { visitId: "visit-2", firstName: "Deniz", lastName: "Yılmaz", email: "deniz@example.test", company: "Acme" },
+    ],
+    visitTypeId: "type-1", hostEmployeeId: "host-1", hostEmployeeName: "Maya Kara", hostCompanyId: "company-1", facilityId: "facility-1",
+    plannedStart: "2026-09-04T13:00:00.000Z", plannedEnd: "2026-09-04T14:00:00.000Z",
+  }
+  const reschedule = { plannedStart: "2026-09-05T09:00:00.000Z", plannedEnd: "2026-09-05T10:00:00.000Z" }
+
+  /** A meeting group of two visits: the first stays PLANNED, the second carries `secondStatus`. */
+  function planningFixture(secondStatus: VisitStatus) {
+    const first = visit({ id: "visit-1" })
+    const second = visit({ id: "visit-2", status: secondStatus, visitor: { id: "visitor-2", firstName: "Deniz", lastName: "Yılmaz", company: "Acme" } })
+    let submitted: MeetingInput | undefined
+    const updateMeeting = vi.fn(async (_id: string, input: MeetingInput) => { submitted = input; return { meeting, visits: [first, second] } })
+    const updateMeetingTimes = vi.fn(async () => undefined)
+    const repository = unusedRepository({
+      findMeeting: async () => ({ meeting, visits: [first, second] }),
+      findVisit: async (id: string) => (id === "visit-2" ? second : first),
+      findVisitType: async () => visitType,
+      findEmployeeById: async () => host,
+      findActiveEmployeeByName: async () => host,
+      updateMeeting,
+      updateMeetingTimes,
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+    return { service, submitted: () => submitted, updateMeeting, updateMeetingTimes }
+  }
+
+  it("edits the shared meeting fields while every visit is still PLANNED", async () => {
+    const fixture = planningFixture("PLANNED")
+
+    await fixture.service.updateMeeting("meeting-1", editInput, OWNER)
+
+    expect(fixture.updateMeeting).toHaveBeenCalledOnce()
+    expect(fixture.submitted()).toMatchObject({ plannedStart: "2026-09-04T13:00:00.000Z", plannedEnd: "2026-09-04T14:00:00.000Z", hostEmployeeName: "Maya Kara" })
+  })
+
+  it("reschedules the meeting time window while every visit is still PLANNED", async () => {
+    const fixture = planningFixture("PLANNED")
+
+    await fixture.service.rescheduleVisit("visit-1", reschedule, OWNER)
+
+    expect(fixture.updateMeetingTimes).toHaveBeenCalledWith("meeting-1", new Date(reschedule.plannedStart), new Date(reschedule.plannedEnd))
+  })
+
+  it.each(lockingStatuses)("rejects a meeting edit while a %s visit is in the group", async (status) => {
+    const fixture = planningFixture(status)
+
+    await expect(fixture.service.updateMeeting("meeting-1", editInput, OWNER)).rejects.toMatchObject({ statusCode: 409, code: "MEETING_VISITS_NOT_PLANNED" })
+
+    expect(fixture.updateMeeting).not.toHaveBeenCalled()
+    expect(meeting).toMatchObject({ plannedStart: "2026-09-03T09:00:00.000Z", plannedEnd: "2026-09-03T10:00:00.000Z", hostEmployeeId: "host-1", hostEmployeeName: "Maya Kara", hostCompanyId: "company-1", facilityId: "facility-1", visitTypeId: "type-1" })
+  })
+
+  it.each(lockingStatuses)("rejects rescheduling the still PLANNED visit while a %s visit is in the group", async (status) => {
+    const fixture = planningFixture(status)
+
+    await expect(fixture.service.rescheduleVisit("visit-1", reschedule, OWNER)).rejects.toMatchObject({ statusCode: 409, code: "MEETING_VISITS_NOT_PLANNED" })
+
+    expect(fixture.updateMeetingTimes).not.toHaveBeenCalled()
+    expect(meeting).toMatchObject({ plannedStart: "2026-09-03T09:00:00.000Z", plannedEnd: "2026-09-03T10:00:00.000Z" })
+  })
+
+  it("surfaces the repository guard when a visit stops being PLANNED after the service snapshot", async () => {
+    const first = visit({ id: "visit-1" })
+    let second = visit({ id: "visit-2", visitor: { id: "visitor-2", firstName: "Deniz", lastName: "Yılmaz", company: "Acme" } })
+    // The repository re-checks the invariant inside its write transaction; this fake stands in
+    // for that re-read, so the check-in below cannot be missed the way the snapshot misses it.
+    const updateMeeting = vi.fn(async () => { assertMeetingPlanningUnlocked([first.status, second.status]); return { meeting, visits: [first, second] } })
+    const repository = unusedRepository({
+      findMeeting: async () => {
+        const snapshot = { meeting, visits: [first, second] }
+        second = { ...second, status: "CHECKED_IN" } // a Security check-in commits right after the read
+        return snapshot
+      },
+      findVisit: async () => first,
+      findVisitType: async () => visitType,
+      findEmployeeById: async () => host,
+      findActiveEmployeeByName: async () => host,
+      updateMeeting,
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.updateMeeting("meeting-1", editInput, OWNER)).rejects.toMatchObject({ statusCode: 409, code: "MEETING_VISITS_NOT_PLANNED" })
+    expect(meeting).toMatchObject({ plannedStart: "2026-09-03T09:00:00.000Z", plannedEnd: "2026-09-03T10:00:00.000Z" })
   })
 })

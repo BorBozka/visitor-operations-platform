@@ -8,6 +8,7 @@ import type {
   VisitorCardDto, VisitorRuleDto, VisitDto, VisitTypeDto,
 } from "../modules/visitor-operations/types.js"
 import { parseEnum, invitationStatuses, ruleAcceptanceMethods, visitorCardStatuses, visitStatuses } from "../modules/visitor-operations/types.js"
+import { assertMeetingPlanningUnlocked } from "../modules/visitor-operations/meeting-planning-lock.js"
 import type { ResourceExtensionGuard } from "./resource-assignment-repository.js"
 
 const invitationReset = { invitationStatus: "NOT_SENT", invitationSentAt: null, invitationError: null } as const
@@ -163,7 +164,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
     return (await this.findMeeting(id))!
   }
   async updateMeeting(id: string, input: MeetingInput, hostEmployeeId: string | null) {
-    await this.prisma.$transaction(async (tx) => {
+    await this.writeSharedPlanning(id, async (tx) => {
       await tx.meeting.update({ where: { id }, data: { visitTypeId: input.visitTypeId, hostEmployeeId, hostEmployeeName: input.hostEmployeeName, hostCompanyId: input.hostCompanyId, facilityId: input.facilityId, plannedStart: new Date(input.plannedStart), plannedEnd: new Date(input.plannedEnd), note: input.note, hasAdditionalRequirements: input.hasAdditionalRequirements ?? false, additionalRequirementNote: input.additionalRequirementNote } })
       for (const visitor of input.visitors) {
         if (visitor.visitId) { const visit = await tx.visit.findUnique({ where: { id: visitor.visitId }, select: { visitorId: true } }); if (visit) await tx.visitor.update({ where: { id: visit.visitorId }, data: { firstName: visitor.firstName, lastName: visitor.lastName, email: visitor.email, company: visitor.company, phone: visitor.phone } }) }
@@ -174,10 +175,29 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
     return (await this.findMeeting(id))!
   }
   async updateMeetingTimes(id: string, plannedStart: Date, plannedEnd: Date) {
-    await this.prisma.$transaction(async (tx) => {
+    await this.writeSharedPlanning(id, async (tx) => {
       await tx.meeting.update({ where: { id }, data: { plannedStart, plannedEnd } })
       await tx.visit.updateMany({ where: { meetingId: id, status: "PLANNED" }, data: invitationReset })
     })
+  }
+  /**
+   * Serializable write of the Meeting's shared planning fields. The all-PLANNED invariant is
+   * re-checked from the rows read inside the transaction, so a check-in / check-out / cancel that
+   * lands after the service read its snapshot either loses the race (and this write rejects with
+   * the same 409) or aborts the transaction as a write conflict, which maps to a 409 too.
+   */
+  private async writeSharedPlanning(meetingId: string, write: (tx: Prisma.TransactionClient) => Promise<void>) {
+    try {
+      await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+        const visits = await tx.visit.findMany({ where: { meetingId }, select: { status: true } })
+        assertMeetingPlanningUnlocked(visits.map((visit) => visit.status))
+        await write(tx)
+      }, { isolationLevel: "Serializable" }))
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      if (isWriteConflictError(error)) throw new ApiError(409, "MEETING_PLANNING_CONFLICT", "Toplantı güncellenirken ziyaret durumu değişti, lütfen tekrar deneyin.")
+      throw error
+    }
   }
   async extendMeetingTimes(id: string, plannedStart: Date, plannedEnd: Date) {
     try {
