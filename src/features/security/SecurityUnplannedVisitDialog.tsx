@@ -35,8 +35,19 @@ export function SecurityUnplannedVisitDialog({ open, onOpenChange, onCreated, sc
     setError("")
     setSubmitting(false)
     setLoading(true)
-    void Promise.all([securityService.getAvailableVisitorCards(), securityService.getActiveVisitorRule(), adminService.getOperationalSettings()])
-      .then(([nextCards, nextRule, settings]) => { setCards(nextCards); setActiveRule(nextRule); setWorkdayEndTime(settings.workdayEndTime) })
+    // Load required data: cards and active visitor rule are mandatory for unplanned visits
+    void Promise.all([securityService.getAvailableVisitorCards(), securityService.getActiveVisitorRule()])
+      .then(([nextCards, nextRule]) => {
+        setCards(nextCards)
+        setActiveRule(nextRule)
+        // Settings is optional; use fallback if fetch fails
+        void adminService
+          .getOperationalSettings()
+          .then((settings) => setWorkdayEndTime(settings.workdayEndTime))
+          .catch(() => {
+            // Fallback to default time; no error to user
+          })
+      })
       .catch((reason) => setError(reason instanceof Error ? reason.message : "Plansız ziyaret için gereken bilgiler yüklenemedi."))
       .finally(() => setLoading(false))
   }, [open])

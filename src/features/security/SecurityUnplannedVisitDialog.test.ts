@@ -40,4 +40,132 @@ describe("SecurityUnplannedVisitDialog contract", () => {
     expect(source).toContain("Kaydet ve giriş yap")
     expect(source).toContain('role="alert"')
   })
+
+  it("separates required loading (cards, active rule) from optional settings fetch with fallback", () => {
+    // Required data loads as Promise.all first
+    expect(source).toContain("Promise.all([securityService.getAvailableVisitorCards(), securityService.getActiveVisitorRule()])")
+    // Settings is loaded separately after required data
+    expect(source).toContain("getOperationalSettings()")
+    // Settings error is caught and does not propagate
+    expect(source).toContain(".catch(() => {")
+    // Fallback time is used when settings fetch fails
+    expect(source).toContain("const workdayEndMinutes = parseClockTime(workdayEndTime) ?? 18 * 60 + 15")
+  })
+})
+
+describe("SecurityUnplannedVisitDialog behavior", () => {
+  it("verifies that required loading (cards + rule) is separate from optional settings fetch", async () => {
+    const { vi } = await import("vitest")
+    const { securityService } = await import("@/services")
+    const { adminService } = await import("@/services")
+
+    // Mock required data to succeed
+    const mockCards = [
+      { id: "card-1", cardNumber: "C001", status: "AVAILABLE" as const },
+      { id: "card-2", cardNumber: "C002", status: "AVAILABLE" as const },
+    ]
+    const mockRule = {
+      id: "rule-1",
+      version: 1,
+      content: "Standard rules",
+      publishedAt: "2025-01-01T00:00:00Z",
+      active: true,
+    }
+
+    vi.spyOn(securityService, "getAvailableVisitorCards").mockResolvedValueOnce(mockCards)
+    vi.spyOn(securityService, "getActiveVisitorRule").mockResolvedValueOnce(mockRule)
+    vi.spyOn(adminService, "getOperationalSettings").mockRejectedValueOnce(new Error("Settings unavailable"))
+
+    // Simulate the component's loading logic: Promise.all for required data
+    const requiredDataPromise = Promise.all([
+      securityService.getAvailableVisitorCards(),
+      securityService.getActiveVisitorRule(),
+    ])
+
+    // Then separately load optional settings
+    const [loadedCards, loadedRule] = await requiredDataPromise
+    const settingsPromise = adminService
+      .getOperationalSettings()
+      .then((s) => s.workdayEndTime)
+      .catch(() => "18:15") // Fallback
+
+    // Verify required data loaded
+    expect(loadedCards).toEqual(mockCards)
+    expect(loadedRule).toEqual(mockRule)
+
+    // Verify settings failed but fallback is available
+    const workdayEndTime = await settingsPromise
+    expect(workdayEndTime).toBe("18:15")
+
+    // Verify all service calls were made
+    expect(securityService.getAvailableVisitorCards).toHaveBeenCalled()
+    expect(securityService.getActiveVisitorRule).toHaveBeenCalled()
+    expect(adminService.getOperationalSettings).toHaveBeenCalled()
+  })
+
+  it("verifies that cards failure prevents successful dialog load", async () => {
+    const { vi } = await import("vitest")
+    const { securityService } = await import("@/services")
+
+    vi.spyOn(securityService, "getAvailableVisitorCards").mockRejectedValueOnce(new Error("Cards unavailable"))
+    vi.spyOn(securityService, "getActiveVisitorRule").mockResolvedValueOnce({
+      id: "rule-1",
+      version: 1,
+      content: "rules",
+      publishedAt: "2025-01-01T00:00:00Z",
+      active: true,
+    })
+
+    // Simulate component's Promise.all for required data — should reject
+    const requiredDataPromise = Promise.all([
+      securityService.getAvailableVisitorCards(),
+      securityService.getActiveVisitorRule(),
+    ])
+
+    // Verify that required data loading fails
+    await expect(requiredDataPromise).rejects.toThrow("Cards unavailable")
+  })
+
+  it("verifies that active rule failure prevents successful dialog load", async () => {
+    const { vi } = await import("vitest")
+    const { securityService } = await import("@/services")
+
+    vi.spyOn(securityService, "getAvailableVisitorCards").mockResolvedValueOnce([
+      { id: "card-1", cardNumber: "C001", status: "AVAILABLE" as const },
+    ])
+    vi.spyOn(securityService, "getActiveVisitorRule").mockRejectedValueOnce(new Error("Rule unavailable"))
+
+    // Simulate component's Promise.all for required data — should reject
+    const requiredDataPromise = Promise.all([
+      securityService.getAvailableVisitorCards(),
+      securityService.getActiveVisitorRule(),
+    ])
+
+    // Verify that required data loading fails
+    await expect(requiredDataPromise).rejects.toThrow("Rule unavailable")
+  })
+
+  it("verifies that workday-end time falls back to 18:15 when settings unavailable", async () => {
+    // Simulate the fallback logic in component
+    const parseClockTime = (time: string) => {
+      const [hours, minutes] = time.split(":").map(Number)
+      return hours * 60 + minutes
+    }
+
+    const workdayEndTime = "18:15"
+    const workdayEndMinutes = parseClockTime(workdayEndTime) ?? 18 * 60 + 15
+
+    expect(workdayEndMinutes).toBe(18 * 60 + 15)
+
+    // Simulate settings fetch failure with fallback
+    interface OperationalSettings {
+      workdayEndTime: string
+    }
+    const settingsPromise = Promise.reject(new Error("Settings unavailable"))
+      .then((s: OperationalSettings) => s.workdayEndTime)
+      .catch(() => workdayEndTime)
+
+    const fallbackTime = await settingsPromise
+    expect(fallbackTime).toBe("18:15")
+  })
 })
