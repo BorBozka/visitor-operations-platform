@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { AccessContext } from "../../lib/authorization.js"
 import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
-import { CheckInConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { CheckInConflictError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
 import type { MeetingDto, MeetingInput, VisitDto, VisitStatus } from "./types.js"
@@ -25,7 +25,7 @@ function unusedRepository(overrides: Record<string, unknown>): VisitorOperations
   return {
     listVisitTypes: async () => [], findVisitType: async () => null, saveVisitType: async () => { throw new Error("unused") }, listMeetings: async () => [], listVisits: async () => [], findMeeting: async () => null, findVisit: async () => null,
     findEmployeeByUserId: async () => null, findEmployeeById: async () => null, findActiveEmployeeByName: async () => null, getReferenceData: async () => ({}), createMeeting: async () => { throw new Error("unused") }, updateMeeting: async () => { throw new Error("unused") }, updateMeetingTimes: async () => undefined, extendMeetingTimes: async () => undefined, cancelVisit: async () => undefined, cancelMeeting: async () => undefined, closeMeeting: async () => undefined,
-    prepareInvitation: async () => { throw new Error("unused") }, finishInvitation: async () => undefined, findPublicPreRegistration: async () => null, updatePublicVisitor: async () => undefined, acceptPublicRule: async () => { throw new Error("unused") }, listRules: async () => [], getActiveRule: async () => null, publishRule: async () => { throw new Error("unused") }, listCards: async () => [], findCard: async () => null, saveCard: async () => { throw new Error("unused") }, setCardStatus: async () => { throw new Error("unused") }, checkIn: async () => { throw new Error("unused") }, checkOut: async () => undefined, listUnreturnedIssues: async () => [], lateReturn: async () => undefined, createUnplanned: async () => { throw new Error("unused") }, correctVisitor: async () => undefined,
+    prepareInvitation: async () => { throw new Error("unused") }, finishInvitation: async () => undefined, findPublicPreRegistration: async () => null, updatePublicVisitor: async () => undefined, acceptPublicRule: async () => { throw new Error("unused") }, listRules: async () => [], getActiveRule: async () => null, publishRule: async () => { throw new Error("unused") }, listCards: async () => [], findCard: async () => null, saveCard: async () => { throw new Error("unused") }, updateCard: async () => { throw new Error("unused") }, setCardStatus: async () => { throw new Error("unused") }, checkIn: async () => { throw new Error("unused") }, checkOut: async () => undefined, listUnreturnedIssues: async () => [], lateReturn: async () => undefined, createUnplanned: async () => { throw new Error("unused") }, correctVisitor: async () => undefined,
     ...overrides,
   } as VisitorOperationsRepository
 }
@@ -168,10 +168,67 @@ describe("Visitor operations state guards", () => {
 
   it("allows only NOT_RETURNED to LOST and LOST to AVAILABLE", async () => {
     const email = new FakeEmailSender(), setStatus = vi.fn(async (_id: string, status: string) => ({ id: "card-1", cardNumber: "001", status: status as "LOST", createdAt: now.toISOString(), updatedAt: now.toISOString() }))
-    const repository = unusedRepository({ findCard: async () => ({ id: "card-1", cardNumber: "001", status: "NOT_RETURNED", createdAt: now.toISOString(), updatedAt: now.toISOString() }), setCardStatus: setStatus })
+    const repository = unusedRepository({ findCard: async () => ({ id: "card-1", cardNumber: "001", status: "NOT_RETURNED", assignedVisitId: "visit-1", createdAt: now.toISOString(), updatedAt: now.toISOString() }), setCardStatus: setStatus })
     const service = new VisitorOperationsService(repository, email, "https://web.example.test", undefined, () => now)
     await expect(service.markCardLost("card-1")).resolves.toMatchObject({ status: "LOST" })
-    expect(setStatus).toHaveBeenCalledWith("card-1", "LOST")
+    expect(setStatus).toHaveBeenCalledWith("card-1", "LOST", { status: "NOT_RETURNED", currentVisitId: "visit-1" })
+  })
+
+  it("disables AVAILABLE cards and enables DISABLED cards with their expected state", async () => {
+    let status: "AVAILABLE" | "DISABLED" = "AVAILABLE"
+    const setCardStatus = vi.fn(async (_id: string, next: "AVAILABLE" | "DISABLED") => {
+      status = next
+      return { id: "card-1", cardNumber: "001", status, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+    })
+    const repository = unusedRepository({
+      findCard: async () => ({ id: "card-1", cardNumber: "001", status, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      setCardStatus,
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.setCardActive("card-1", false)).resolves.toMatchObject({ status: "DISABLED" })
+    await expect(service.setCardActive("card-1", true)).resolves.toMatchObject({ status: "AVAILABLE" })
+    expect(setCardStatus).toHaveBeenNthCalledWith(1, "card-1", "DISABLED", { status: "AVAILABLE", currentVisitId: null })
+    expect(setCardStatus).toHaveBeenNthCalledWith(2, "card-1", "AVAILABLE", { status: "DISABLED", currentVisitId: null })
+  })
+
+  it("returns 409 when an Admin mutation loses its expected-state race", async () => {
+    const repository = unusedRepository({
+      findCard: async () => ({ id: "card-1", cardNumber: "001", status: "AVAILABLE", createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      setCardStatus: async () => { throw new VisitorCardConflictError("CARD_STATE_CHANGED") },
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.setCardActive("card-1", false)).rejects.toMatchObject({ statusCode: 409, code: "CARD_STATE_CONFLICT" })
+  })
+
+  it("returns 409 for operational-card Admin disable and rename attempts", async () => {
+    const updateCard = vi.fn()
+    const setCardStatus = vi.fn()
+    const repository = unusedRepository({
+      findCard: async () => ({ id: "card-1", cardNumber: "001", status: "IN_USE", assignedVisitId: "visit-1", createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      updateCard,
+      setCardStatus,
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.setCardActive("card-1", false)).rejects.toMatchObject({ statusCode: 409, code: "CARD_OPERATIONAL" })
+    await expect(service.updateCard("card-1", { cardNumber: "002", active: true })).rejects.toMatchObject({ statusCode: 409, code: "CARD_OPERATIONAL" })
+    expect(updateCard).not.toHaveBeenCalled()
+    expect(setCardStatus).not.toHaveBeenCalled()
+  })
+
+  it("returns 409 instead of 500 for invalid checkout assignment and late-return state", async () => {
+    const checkedIn = visit({ status: "CHECKED_IN", visitorCardId: "card-1", visitorCardNumber: "001" })
+    const repository = unusedRepository({
+      findVisit: async () => checkedIn,
+      checkOut: async () => { throw new VisitorCardConflictError("INVALID_CARD_ASSIGNMENT") },
+      lateReturn: async () => { throw new VisitorCardConflictError("INVALID_LATE_RETURN_STATE") },
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.checkOutVisit("visit-1", true, SECURITY_CTX)).rejects.toMatchObject({ statusCode: 409, code: "CARD_ASSIGNMENT_CONFLICT" })
+    await expect(service.receiveLateCardReturn("visit-1", SECURITY_CTX)).rejects.toMatchObject({ statusCode: 409, code: "INVALID_CARD_TRANSITION" })
   })
 })
 

@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client"
 import { describe, expect, it, vi } from "vitest"
 
 import type { MeetingInput } from "../modules/visitor-operations/types.js"
-import { PrismaVisitorOperationsRepository } from "./visitor-operations-repository.js"
+import { CheckInConflictError, PrismaVisitorOperationsRepository, VisitorCardConflictError } from "./visitor-operations-repository.js"
 
 const sentAt = new Date("2026-09-02T08:00:00.000Z")
 const updatedAt = new Date("2026-09-02T09:00:00.000Z")
@@ -278,36 +278,216 @@ describe("PrismaVisitorOperationsRepository shared planning invariant", () => {
   })
 })
 
-describe("PrismaVisitorOperationsRepository card audit identity", () => {
-  it("keeps assignment on LOST and clears it only when restored to AVAILABLE", async () => {
-    let card: FixtureCard = {
-      id: "card-1",
-      cardNumber: "001",
-      status: "NOT_RETURNED",
-      currentVisitId: "visit-1",
-      assignedVisitorName: "Ada Yılmaz",
-      createdAt: updatedAt,
-      updatedAt,
-    }
-    const prisma = {
-      visitorCard: {
-        update: vi.fn(async ({ data }: { data: Partial<FixtureCard> }) => {
-          card = { ...card, ...data }
-          return card
-        }),
-      },
-    } as unknown as PrismaClient
-    const repository = new PrismaVisitorOperationsRepository(prisma)
+function createCardMutationFixture(initial: Partial<FixtureCard> = {}) {
+  let card: FixtureCard = {
+    id: "card-1", cardNumber: "001", status: "AVAILABLE", currentVisitId: null,
+    assignedVisitorName: null, createdAt: updatedAt, updatedAt, ...initial,
+  }
+  let beforeNextWrite: (() => void) | undefined
+  const updateMany = vi.fn(async ({ where, data }: { where: { id: string; status: string; currentVisitId: string | null }; data: Partial<FixtureCard> }) => {
+    beforeNextWrite?.()
+    beforeNextWrite = undefined
+    if (card.id !== where.id || card.status !== where.status || card.currentVisitId !== where.currentVisitId) return { count: 0 }
+    card = { ...card, ...data, updatedAt }
+    return { count: 1 }
+  })
+  const prisma = {
+    visitorCard: {
+      findUnique: vi.fn(async () => card),
+      updateMany,
+    },
+  } as unknown as PrismaClient
+  return {
+    prisma,
+    updateMany,
+    card: () => card,
+    beforeWrite: (operation: () => void) => { beforeNextWrite = operation },
+    replace: (next: Partial<FixtureCard>) => { card = { ...card, ...next } },
+  }
+}
 
-    await expect(repository.setCardStatus("card-1", "LOST")).resolves.toMatchObject({
-      status: "LOST",
-      assignedVisitId: "visit-1",
-      assignedVisitorName: "Ada Yılmaz",
+function createSecurityLifecycleFixture() {
+  const base = createMeetingFixture()
+  const visit = base.planned
+  let beforeNextCardWrite: (() => void) | undefined
+  const card: FixtureCard = {
+    id: "card-1", cardNumber: "001", status: "AVAILABLE", currentVisitId: null,
+    assignedVisitorName: null, createdAt: updatedAt, updatedAt,
+  }
+  const matches = (row: Record<string, unknown>, where: Record<string, unknown>) => Object.entries(where).every(([key, value]) => row[key] === value)
+  const tx = {
+    visit: {
+      findUnique: vi.fn(async () => visit),
+      findUniqueOrThrow: vi.fn(async () => visit),
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Partial<FixtureVisit> }) => {
+        if (!matches(visit as unknown as Record<string, unknown>, where)) return { count: 0 }
+        Object.assign(visit, data)
+        return { count: 1 }
+      }),
+      count: vi.fn(async () => base.meeting.visits.filter((item) => item.status === "CHECKED_IN").length),
+    },
+    visitor: { update: vi.fn(async ({ data }: { data: Partial<FixtureVisitor> }) => Object.assign(visit.visitor, data)) },
+    visitorCard: {
+      findUnique: vi.fn(async () => card),
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Partial<FixtureCard> }) => {
+        beforeNextCardWrite?.()
+        beforeNextCardWrite = undefined
+        if (!matches(card as unknown as Record<string, unknown>, where)) return { count: 0 }
+        Object.assign(card, data)
+        return { count: 1 }
+      }),
+    },
+    visitRuleAcceptance: { findFirst: vi.fn(async () => ({ id: "acceptance-1" })) },
+    meeting: { update: vi.fn(async ({ data }: { data: Partial<FixtureMeeting> }) => Object.assign(base.meeting, data)) },
+  }
+  const prisma = {
+    $transaction: vi.fn(async (operation: (client: typeof tx) => Promise<unknown>) => {
+      const visitSnapshot = { ...visit }
+      const visitorSnapshot = { ...visit.visitor }
+      const meetingSnapshot = { ...base.meeting }
+      try {
+        return await operation(tx)
+      } catch (error) {
+        Object.assign(visit, visitSnapshot)
+        Object.assign(visit.visitor, visitorSnapshot)
+        Object.assign(base.meeting, meetingSnapshot)
+        throw error
+      }
+    }),
+  } as unknown as PrismaClient
+  return { card, prisma, tx, visit, beforeCardWrite: (operation: () => void) => { beforeNextCardWrite = operation } }
+}
+
+describe("PrismaVisitorOperationsRepository visitor-card compare-and-set", () => {
+  it("disables AVAILABLE and enables DISABLED cards using status/currentVisitId predicates", async () => {
+    const fixture = createCardMutationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.setCardStatus("card-1", "DISABLED", { status: "AVAILABLE", currentVisitId: null })).resolves.toMatchObject({ status: "DISABLED" })
+    await expect(repository.setCardStatus("card-1", "AVAILABLE", { status: "DISABLED", currentVisitId: null })).resolves.toMatchObject({ status: "AVAILABLE" })
+    await expect(repository.updateCard("card-1", { cardNumber: "002", cardNumberNormalized: "002", status: "AVAILABLE" }, { status: "AVAILABLE", currentVisitId: null })).resolves.toMatchObject({ cardNumber: "002", status: "AVAILABLE" })
+    expect(fixture.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: "card-1", status: "AVAILABLE", currentVisitId: null },
+      data: { status: "DISABLED", currentVisitId: null, assignedVisitorName: null },
     })
-    await expect(repository.setCardStatus("card-1", "AVAILABLE")).resolves.toMatchObject({
-      status: "AVAILABLE",
-      assignedVisitId: undefined,
-      assignedVisitorName: undefined,
+  })
+
+  it("keeps assignment on LOST and clears it only when restored to AVAILABLE", async () => {
+    const fixture = createCardMutationFixture({ status: "NOT_RETURNED", currentVisitId: "visit-1", assignedVisitorName: "Ada Yılmaz" })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.setCardStatus("card-1", "LOST", { status: "NOT_RETURNED", currentVisitId: "visit-1" })).resolves.toMatchObject({ status: "LOST", assignedVisitId: "visit-1", assignedVisitorName: "Ada Yılmaz" })
+    await expect(repository.setCardStatus("card-1", "AVAILABLE", { status: "LOST", currentVisitId: "visit-1" })).resolves.toMatchObject({ status: "AVAILABLE", assignedVisitId: undefined, assignedVisitorName: undefined })
+  })
+
+  it("cannot overwrite a Security check-in committed after the Admin snapshot", async () => {
+    const fixture = createCardMutationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    const adminSnapshot = await repository.findCard("card-1")
+    fixture.beforeWrite(() => fixture.replace({ status: "IN_USE", currentVisitId: "visit-1", assignedVisitorName: "Ada Yılmaz" }))
+
+    await expect(repository.updateCard("card-1", { cardNumber: "002", cardNumberNormalized: "002", status: "DISABLED" }, { status: adminSnapshot!.status, currentVisitId: adminSnapshot!.assignedVisitId ?? null })).rejects.toEqual(expect.objectContaining({ reason: "CARD_STATE_CHANGED" }))
+
+    expect(fixture.card()).toMatchObject({ cardNumber: "001", status: "IN_USE", currentVisitId: "visit-1", assignedVisitorName: "Ada Yılmaz" })
+    expect(fixture.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "card-1", status: "AVAILABLE", currentVisitId: null } }))
+  })
+})
+
+describe("PrismaVisitorOperationsRepository Security card lifecycle", () => {
+  it("checks in with an atomic AVAILABLE-to-IN_USE assignment", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.checkIn("visit-planned", { visitorCardId: "card-1" }, updatedAt)).resolves.toMatchObject({ visit: { status: "CHECKED_IN", visitorCardId: "card-1" } })
+    expect(fixture.card).toMatchObject({ status: "IN_USE", currentVisitId: "visit-planned", assignedVisitorName: "Ada Yılmaz" })
+    expect(fixture.tx.visitorCard.updateMany).toHaveBeenCalledWith({ where: { id: "card-1", status: "AVAILABLE", currentVisitId: null }, data: { status: "IN_USE", currentVisitId: "visit-planned", assignedVisitorName: "Ada Yılmaz" } })
+  })
+
+  it.each([
+    { returned: true, expectedCardStatus: "AVAILABLE", expectedAssignment: null },
+    { returned: false, expectedCardStatus: "NOT_RETURNED", expectedAssignment: "visit-planned" },
+  ])("checks out with returned=$returned and preserves the card invariant", async ({ returned, expectedCardStatus, expectedAssignment }) => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.visit.status = "CHECKED_IN"
+    fixture.visit.visitorCardId = "card-1"
+    fixture.visit.visitorCardNumber = "001"
+    fixture.card.status = "IN_USE"
+    fixture.card.currentVisitId = "visit-planned"
+    fixture.card.assignedVisitorName = "Ada Yılmaz"
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await repository.checkOut("visit-planned", returned, updatedAt)
+
+    expect(fixture.visit).toMatchObject({ status: "CHECKED_OUT", visitorCardReturned: returned })
+    expect(fixture.card).toMatchObject({ status: expectedCardStatus, currentVisitId: expectedAssignment })
+  })
+
+  it("receives a late return only from the matching NOT_RETURNED assignment", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.visit.status = "CHECKED_OUT"
+    fixture.visit.visitorCardId = "card-1"
+    fixture.visit.visitorCardReturned = false
+    fixture.card.status = "NOT_RETURNED"
+    fixture.card.currentVisitId = "visit-planned"
+    fixture.card.assignedVisitorName = "Ada Yılmaz"
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await repository.lateReturn("visit-planned", updatedAt)
+
+    expect(fixture.visit.visitorCardReturned).toBe(true)
+    expect(fixture.card).toMatchObject({ status: "AVAILABLE", currentVisitId: null, assignedVisitorName: null })
+  })
+
+  it("rejects a wrong checkout assignment with a typed conflict", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.visit.status = "CHECKED_IN"
+    fixture.visit.visitorCardId = "card-1"
+    fixture.card.status = "IN_USE"
+    fixture.card.currentVisitId = "visit-other"
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.checkOut("visit-planned", true, updatedAt)).rejects.toEqual(expect.objectContaining<Partial<VisitorCardConflictError>>({ reason: "INVALID_CARD_ASSIGNMENT" }))
+  })
+
+  it("rejects a CHECKED_IN late return with a typed conflict", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.visit.status = "CHECKED_IN"
+    fixture.visit.visitorCardId = "card-1"
+    fixture.card.status = "IN_USE"
+    fixture.card.currentVisitId = "visit-planned"
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.lateReturn("visit-planned", updatedAt)).rejects.toEqual(expect.objectContaining<Partial<VisitorCardConflictError>>({ reason: "INVALID_LATE_RETURN_STATE" }))
+  })
+
+  it("does not erase an Admin state change that wins a late-return race", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.visit.status = "CHECKED_OUT"
+    fixture.visit.visitorCardId = "card-1"
+    fixture.visit.visitorCardReturned = false
+    fixture.card.status = "NOT_RETURNED"
+    fixture.card.currentVisitId = "visit-planned"
+    fixture.card.assignedVisitorName = "Ada Yılmaz"
+    fixture.beforeCardWrite(() => { fixture.card.status = "LOST" })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.lateReturn("visit-planned", updatedAt)).rejects.toEqual(expect.objectContaining<Partial<VisitorCardConflictError>>({ reason: "INVALID_CARD_ASSIGNMENT" }))
+
+    expect(fixture.visit.visitorCardReturned).toBe(false)
+    expect(fixture.card).toMatchObject({ status: "LOST", currentVisitId: "visit-planned", assignedVisitorName: "Ada Yılmaz" })
+  })
+
+  it("turns a lost check-in CAS into CheckInConflictError without overwriting assignment", async () => {
+    const fixture = createSecurityLifecycleFixture()
+    fixture.tx.visitorCard.findUnique.mockImplementationOnce(async () => {
+      const snapshot = { ...fixture.card }
+      fixture.card.status = "DISABLED"
+      return snapshot
     })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.checkIn("visit-planned", { visitorCardId: "card-1" }, updatedAt)).rejects.toBeInstanceOf(CheckInConflictError)
+    expect(fixture.visit).toMatchObject({ status: "PLANNED", visitorCardId: null })
+    expect(fixture.card).toMatchObject({ status: "DISABLED", currentVisitId: null })
   })
 })

@@ -5,7 +5,7 @@ import { isWriteConflictError, withWriteConflictRetry } from "../lib/prisma-conf
 import type {
   CreateUnplannedInput, EmployeeActor, MeetingDto, MeetingInput, MeetingWithVisitsDto,
   RuleAcceptanceDto, SecurityCheckInInput, SecurityCorrectionInput,
-  VisitorCardDto, VisitorRuleDto, VisitDto, VisitTypeDto,
+  VisitorCardDto, VisitorCardStatus, VisitorRuleDto, VisitDto, VisitTypeDto,
 } from "../modules/visitor-operations/types.js"
 import { parseEnum, invitationStatuses, ruleAcceptanceMethods, visitorCardStatuses, visitStatuses } from "../modules/visitor-operations/types.js"
 import { assertMeetingPlanningUnlocked } from "../modules/visitor-operations/meeting-planning-lock.js"
@@ -18,6 +18,20 @@ export class CheckInConflictError extends Error {
     super("Check-in state changed concurrently.")
     this.name = "CheckInConflictError"
   }
+}
+
+export type VisitorCardConflictReason = "CARD_STATE_CHANGED" | "INVALID_CHECKOUT_STATE" | "INVALID_CARD_ASSIGNMENT" | "INVALID_LATE_RETURN_STATE"
+
+export class VisitorCardConflictError extends Error {
+  constructor(public readonly reason: VisitorCardConflictReason) {
+    super(`Visitor-card lifecycle conflict: ${reason}.`)
+    this.name = "VisitorCardConflictError"
+  }
+}
+
+export interface VisitorCardExpectedState {
+  status: VisitorCardStatus
+  currentVisitId: string | null
 }
 
 function isCheckInWriteConflict(error: unknown) {
@@ -118,8 +132,9 @@ export interface VisitorOperationsRepository {
   publishRule(content: string, now: Date): Promise<VisitorRuleDto>
   listCards(): Promise<VisitorCardDto[]>
   findCard(id: string): Promise<VisitorCardDto | null>
-  saveCard(input: { id?: string; cardNumber: string; cardNumberNormalized: string; status?: string }): Promise<VisitorCardDto>
-  setCardStatus(id: string, status: string): Promise<VisitorCardDto>
+  saveCard(input: { cardNumber: string; cardNumberNormalized: string; status?: VisitorCardStatus }): Promise<VisitorCardDto>
+  updateCard(id: string, input: { cardNumber: string; cardNumberNormalized: string; status: VisitorCardStatus }, expected: VisitorCardExpectedState): Promise<VisitorCardDto>
+  setCardStatus(id: string, status: VisitorCardStatus, expected: VisitorCardExpectedState): Promise<VisitorCardDto>
   checkIn(visitId: string, input: SecurityCheckInInput, now: Date): Promise<{ visit: VisitDto; hostEmail?: string; hostName?: string }>
   checkOut(visitId: string, cardReturned: boolean, now: Date): Promise<void>
   listUnreturnedIssues(): Promise<{ card: VisitorCardDto; visit: VisitDto }[]>
@@ -239,19 +254,39 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
   async publishRule(content: string, now: Date) { const row = await this.prisma.$transaction(async (tx) => { const latest = await tx.visitorRuleVersion.findFirst({ orderBy: { version: "desc" }, select: { version: true } }); await tx.visitorRuleVersion.updateMany({ where: { active: true }, data: { active: false } }); return tx.visitorRuleVersion.create({ data: { version: (latest?.version ?? 0) + 1, content, publishedAt: now, active: true } }) }, { isolationLevel: "Serializable" }); return toRule(row) }
   async listCards() { return (await this.prisma.visitorCard.findMany({ orderBy: { cardNumber: "asc" } })).map(toCard) }
   async findCard(id: string) { const row = await this.prisma.visitorCard.findUnique({ where: { id } }); return row ? toCard(row) : null }
-  async saveCard(input: { id?: string; cardNumber: string; cardNumberNormalized: string; status?: string }) { const row = input.id ? await this.prisma.visitorCard.update({ where: { id: input.id }, data: { cardNumber: input.cardNumber, cardNumberNormalized: input.cardNumberNormalized } }) : await this.prisma.visitorCard.create({ data: { cardNumber: input.cardNumber, cardNumberNormalized: input.cardNumberNormalized, status: input.status ?? "AVAILABLE" } }); return toCard(row) }
-  async setCardStatus(id: string, status: string) { return toCard(await this.prisma.visitorCard.update({ where: { id }, data: { status, ...(status === "AVAILABLE" || status === "DISABLED" ? { currentVisitId: null, assignedVisitorName: null } : {}) } })) }
+  async saveCard(input: { cardNumber: string; cardNumberNormalized: string; status?: VisitorCardStatus }) { return toCard(await this.prisma.visitorCard.create({ data: { cardNumber: input.cardNumber, cardNumberNormalized: input.cardNumberNormalized, status: input.status ?? "AVAILABLE" } })) }
+  async updateCard(id: string, input: { cardNumber: string; cardNumberNormalized: string; status: VisitorCardStatus }, expected: VisitorCardExpectedState) {
+    return this.mutateCard(id, { cardNumber: input.cardNumber, cardNumberNormalized: input.cardNumberNormalized, status: input.status, ...(input.status === "AVAILABLE" || input.status === "DISABLED" ? { currentVisitId: null, assignedVisitorName: null } : {}) }, expected)
+  }
+  async setCardStatus(id: string, status: VisitorCardStatus, expected: VisitorCardExpectedState) {
+    return this.mutateCard(id, { status, ...(status === "AVAILABLE" || status === "DISABLED" ? { currentVisitId: null, assignedVisitorName: null } : {}) }, expected)
+  }
+  private async mutateCard(id: string, data: Prisma.VisitorCardUpdateManyMutationInput, expected: VisitorCardExpectedState) {
+    try {
+      const changed = await this.prisma.visitorCard.updateMany({ where: { id, status: expected.status, currentVisitId: expected.currentVisitId }, data })
+      if (changed.count !== 1) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      const row = await this.prisma.visitorCard.findUnique({ where: { id } })
+      if (!row) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      return toCard(row)
+    } catch (error) {
+      if (error instanceof VisitorCardConflictError) throw error
+      if (isWriteConflictError(error)) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      throw error
+    }
+  }
   async checkIn(visitId: string, input: SecurityCheckInInput, now: Date) {
     try {
       return await this.prisma.$transaction(async (tx) => {
         const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { ...visitInclude, meeting: { include: { visitType: true, hostCompany: true, facility: true, hostEmployee: { include: { user: true } } } } } })
         const card = await tx.visitorCard.findUnique({ where: { id: input.visitorCardId } })
-        if (!visit || !card || visit.status !== "PLANNED" || card.status !== "AVAILABLE") throw new CheckInConflictError()
+        if (!visit || !card || visit.status !== "PLANNED" || card.status !== "AVAILABLE" || card.currentVisitId !== null) throw new CheckInConflictError()
         const accepted = await tx.visitRuleAcceptance.findFirst({ where: { visitId } })
         if (!accepted) throw new Error("Missing rule acceptance.")
-        await tx.visit.update({ where: { id: visitId }, data: { status: "CHECKED_IN", actualCheckIn: now, visitorCardId: card.id, visitorCardNumber: card.cardNumber, vehiclePlate: input.vehiclePlate } })
+        const visitChanged = await tx.visit.updateMany({ where: { id: visitId, status: "PLANNED", visitorCardId: null }, data: { status: "CHECKED_IN", actualCheckIn: now, visitorCardId: card.id, visitorCardNumber: card.cardNumber, vehiclePlate: input.vehiclePlate } })
+        if (visitChanged.count !== 1) throw new CheckInConflictError()
         if (input.phone) await tx.visitor.update({ where: { id: visit.visitorId }, data: { phone: input.phone } })
-        await tx.visitorCard.update({ where: { id: card.id }, data: { status: "IN_USE", currentVisitId: visitId, assignedVisitorName: `${visit.visitor.firstName} ${visit.visitor.lastName}` } })
+        const cardChanged = await tx.visitorCard.updateMany({ where: { id: card.id, status: "AVAILABLE", currentVisitId: null }, data: { status: "IN_USE", currentVisitId: visitId, assignedVisitorName: `${visit.visitor.firstName} ${visit.visitor.lastName}` } })
+        if (cardChanged.count !== 1) throw new CheckInConflictError()
         const updated = await tx.visit.findUniqueOrThrow({ where: { id: visitId }, include: visitInclude })
         return { visit: toVisit(updated), hostEmail: visit.meeting.hostEmployee?.user?.email ?? undefined, hostName: visit.meeting.hostEmployee?.fullName ?? undefined }
       }, { isolationLevel: "Serializable" })
@@ -260,9 +295,67 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
       throw error
     }
   }
-  async checkOut(visitId: string, cardReturned: boolean, now: Date) { await this.prisma.$transaction(async (tx) => { const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { meeting: true } }); if (!visit || visit.status !== "CHECKED_IN" || !visit.visitorCardId) throw new Error("Invalid checkout state."); const card = await tx.visitorCard.findUnique({ where: { id: visit.visitorCardId } }); if (!card || card.status !== "IN_USE" || card.currentVisitId !== visitId) throw new Error("Invalid card assignment."); await tx.visit.update({ where: { id: visitId }, data: { status: "CHECKED_OUT", actualCheckOut: now, visitorCardReturned: cardReturned } }); await tx.visitorCard.update({ where: { id: card.id }, data: cardReturned ? { status: "AVAILABLE", currentVisitId: null, assignedVisitorName: null } : { status: "NOT_RETURNED" } }); const stillInside = await tx.visit.count({ where: { meetingId: visit.meetingId, status: "CHECKED_IN" } }); if (!visit.meeting.actualMeetingEnd && stillInside === 0) await tx.meeting.update({ where: { id: visit.meetingId }, data: { actualMeetingEnd: now, meetingEndSource: "VISITOR_CHECK_OUT" } }) }, { isolationLevel: "Serializable" }) }
+  async checkOut(visitId: string, cardReturned: boolean, now: Date) {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { meeting: true } })
+        if (!visit || visit.status !== "CHECKED_IN" || !visit.visitorCardId) throw new VisitorCardConflictError("INVALID_CHECKOUT_STATE")
+        const card = await tx.visitorCard.findUnique({ where: { id: visit.visitorCardId } })
+        if (!card || card.status !== "IN_USE" || card.currentVisitId !== visitId) throw new VisitorCardConflictError("INVALID_CARD_ASSIGNMENT")
+        const visitChanged = await tx.visit.updateMany({ where: { id: visitId, status: "CHECKED_IN", visitorCardId: card.id }, data: { status: "CHECKED_OUT", actualCheckOut: now, visitorCardReturned: cardReturned } })
+        if (visitChanged.count !== 1) throw new VisitorCardConflictError("INVALID_CHECKOUT_STATE")
+        const cardChanged = await tx.visitorCard.updateMany({ where: { id: card.id, status: "IN_USE", currentVisitId: visitId }, data: cardReturned ? { status: "AVAILABLE", currentVisitId: null, assignedVisitorName: null } : { status: "NOT_RETURNED" } })
+        if (cardChanged.count !== 1) throw new VisitorCardConflictError("INVALID_CARD_ASSIGNMENT")
+        const stillInside = await tx.visit.count({ where: { meetingId: visit.meetingId, status: "CHECKED_IN" } })
+        if (!visit.meeting.actualMeetingEnd && stillInside === 0) await tx.meeting.update({ where: { id: visit.meetingId }, data: { actualMeetingEnd: now, meetingEndSource: "VISITOR_CHECK_OUT" } })
+      }, { isolationLevel: "Serializable" })
+    } catch (error) {
+      if (error instanceof VisitorCardConflictError) throw error
+      if (isWriteConflictError(error)) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      throw error
+    }
+  }
   async listUnreturnedIssues() { const cards = await this.prisma.visitorCard.findMany({ where: { status: "NOT_RETURNED", currentVisitId: { not: null } }, include: { currentVisit: { include: visitInclude } } }); return cards.flatMap((card) => card.currentVisit && card.currentVisit.status === "CHECKED_OUT" && card.currentVisit.visitorCardReturned === false ? [{ card: toCard(card), visit: toVisit(card.currentVisit) }] : []) }
-  async lateReturn(visitId: string, now: Date) { void now; await this.prisma.$transaction(async (tx) => { const visit = await tx.visit.findUnique({ where: { id: visitId } }); if (!visit?.visitorCardId || visit.status !== "CHECKED_OUT" || visit.visitorCardReturned !== false) throw new Error("Invalid late return state."); const card = await tx.visitorCard.findUnique({ where: { id: visit.visitorCardId } }); if (!card || card.status !== "NOT_RETURNED" || card.currentVisitId !== visitId) throw new Error("Invalid card assignment."); await tx.visit.update({ where: { id: visitId }, data: { visitorCardReturned: true } }); await tx.visitorCard.update({ where: { id: card.id }, data: { status: "AVAILABLE", currentVisitId: null, assignedVisitorName: null } }) }, { isolationLevel: "Serializable" }) }
-  async createUnplanned(input: CreateUnplannedInput, creatorEmployeeId: string, now: Date) { const id = await this.prisma.$transaction(async (tx) => { const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } }); const card = await tx.visitorCard.findUnique({ where: { id: input.visitorCardId } }); if (!rule || !card || card.status !== "AVAILABLE") throw new Error("Missing active rule or available card."); const visitor = await tx.visitor.create({ data: { firstName: input.firstName, lastName: input.lastName, company: input.company } }); const meeting = await tx.meeting.create({ data: { creatorEmployeeId, visitTypeId: input.visitTypeId, hostEmployeeId: null, hostEmployeeName: input.hostEmployeeName, hostCompanyId: input.companyId, facilityId: input.facilityId, plannedStart: now, plannedEnd: new Date(now.getTime() + input.durationMinutes * 60_000), hasAdditionalRequirements: false } }); const visit = await tx.visit.create({ data: { meetingId: meeting.id, visitorId: visitor.id, status: "CHECKED_IN", actualCheckIn: now, visitorCardId: card.id, visitorCardNumber: card.cardNumber, vehiclePlate: input.vehiclePlate } }); await tx.visitRuleAcceptance.create({ data: { visitId: visit.id, visitorId: visitor.id, visitorRuleVersionId: rule.id, ruleVersion: rule.version, acceptedAt: now, method: "SECURITY_DESK", contentSnapshot: rule.content } }); await tx.visitorCard.update({ where: { id: card.id }, data: { status: "IN_USE", currentVisitId: visit.id, assignedVisitorName: `${visitor.firstName} ${visitor.lastName}` } }); return visit.id }, { isolationLevel: "Serializable" }); return (await this.findVisit(id))! }
+  async lateReturn(visitId: string, now: Date) {
+    void now
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const visit = await tx.visit.findUnique({ where: { id: visitId } })
+        if (!visit?.visitorCardId || visit.status !== "CHECKED_OUT" || visit.visitorCardReturned !== false) throw new VisitorCardConflictError("INVALID_LATE_RETURN_STATE")
+        const card = await tx.visitorCard.findUnique({ where: { id: visit.visitorCardId } })
+        if (!card || card.status !== "NOT_RETURNED" || card.currentVisitId !== visitId) throw new VisitorCardConflictError("INVALID_CARD_ASSIGNMENT")
+        const visitChanged = await tx.visit.updateMany({ where: { id: visitId, status: "CHECKED_OUT", visitorCardId: card.id, visitorCardReturned: false }, data: { visitorCardReturned: true } })
+        if (visitChanged.count !== 1) throw new VisitorCardConflictError("INVALID_LATE_RETURN_STATE")
+        const cardChanged = await tx.visitorCard.updateMany({ where: { id: card.id, status: "NOT_RETURNED", currentVisitId: visitId }, data: { status: "AVAILABLE", currentVisitId: null, assignedVisitorName: null } })
+        if (cardChanged.count !== 1) throw new VisitorCardConflictError("INVALID_CARD_ASSIGNMENT")
+      }, { isolationLevel: "Serializable" })
+    } catch (error) {
+      if (error instanceof VisitorCardConflictError) throw error
+      if (isWriteConflictError(error)) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      throw error
+    }
+  }
+  async createUnplanned(input: CreateUnplannedInput, creatorEmployeeId: string, now: Date) {
+    let id: string
+    try {
+      id = await this.prisma.$transaction(async (tx) => {
+        const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } })
+        const card = await tx.visitorCard.findUnique({ where: { id: input.visitorCardId } })
+        if (!rule) throw new Error("Missing active rule.")
+        if (!card || card.status !== "AVAILABLE" || card.currentVisitId !== null) throw new CheckInConflictError()
+        const visitor = await tx.visitor.create({ data: { firstName: input.firstName, lastName: input.lastName, company: input.company } })
+        const meeting = await tx.meeting.create({ data: { creatorEmployeeId, visitTypeId: input.visitTypeId, hostEmployeeId: null, hostEmployeeName: input.hostEmployeeName, hostCompanyId: input.companyId, facilityId: input.facilityId, plannedStart: now, plannedEnd: new Date(now.getTime() + input.durationMinutes * 60_000), hasAdditionalRequirements: false } })
+        const visit = await tx.visit.create({ data: { meetingId: meeting.id, visitorId: visitor.id, status: "CHECKED_IN", actualCheckIn: now, visitorCardId: card.id, visitorCardNumber: card.cardNumber, vehiclePlate: input.vehiclePlate } })
+        await tx.visitRuleAcceptance.create({ data: { visitId: visit.id, visitorId: visitor.id, visitorRuleVersionId: rule.id, ruleVersion: rule.version, acceptedAt: now, method: "SECURITY_DESK", contentSnapshot: rule.content } })
+        const cardChanged = await tx.visitorCard.updateMany({ where: { id: card.id, status: "AVAILABLE", currentVisitId: null }, data: { status: "IN_USE", currentVisitId: visit.id, assignedVisitorName: `${visitor.firstName} ${visitor.lastName}` } })
+        if (cardChanged.count !== 1) throw new CheckInConflictError()
+        return visit.id
+      }, { isolationLevel: "Serializable" })
+    } catch (error) {
+      if (error instanceof CheckInConflictError || isCheckInWriteConflict(error)) throw new CheckInConflictError()
+      throw error
+    }
+    return (await this.findVisit(id))!
+  }
   async correctVisitor(visitId: string, input: SecurityCorrectionInput, actor: EmployeeActor | null, now: Date) { await this.prisma.$transaction(async (tx) => { const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { meeting: true } }); if (!visit) return; const hostChanged = visit.meeting.hostEmployeeName !== input.hostEmployeeName; await tx.visitor.update({ where: { id: visit.visitorId }, data: { firstName: input.firstName, lastName: input.lastName, email: input.email, company: input.company, phone: input.phone } }); await tx.meeting.update({ where: { id: visit.meetingId }, data: { ...(hostChanged ? { hostEmployeeName: input.hostEmployeeName } : {}), ...(input.visitTypeId ? { visitTypeId: input.visitTypeId } : {}) } }); if (hostChanged) await tx.hostCorrectionAudit.create({ data: { visitId, previousHostName: visit.meeting.hostEmployeeName, correctedHostName: input.hostEmployeeName, correctedByUserId: actor?.userId ?? null, correctedByEmployeeId: actor?.id ?? null, correctedAt: now } }) }, { isolationLevel: "Serializable" }) }
 }

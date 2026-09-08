@@ -4,11 +4,11 @@ import type { DeliveryLogger, EmailSender } from "../../delivery/email-sender.js
 import { consoleDeliveryLogger } from "../../delivery/email-sender.js"
 import { ApiError } from "../../lib/api-error.js"
 import { scopeAllows, type AccessContext } from "../../lib/authorization.js"
-import { CheckInConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { CheckInConflictError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import type {
   CreateUnplannedInput, MeetingDto, MeetingInput, PublicPreRegistrationDto, SecurityCheckInInput,
-  SecurityCorrectionInput, VisitDto,
+  SecurityCorrectionInput, VisitorCardDto, VisitDto,
 } from "./types.js"
 import { normalizeCardNumber, normalizeOptional, normalizePlate, normalizeVisitTypeName, validEmail } from "./types.js"
 
@@ -211,10 +211,27 @@ export class VisitorOperationsService {
 
   listCards() { return this.repository.listCards() }
   async createCard(cardNumber: string) { const number = requireText(cardNumber, "Kart numarası zorunludur."); return this.repository.saveCard({ cardNumber: number, cardNumberNormalized: normalizeCardNumber(number) }) }
-  async updateCard(id: string, input: { cardNumber: string; active: boolean }) { const card = await this.requireCard(id); if (!['AVAILABLE', 'DISABLED'].includes(card.status)) throw new ApiError(409, "CARD_OPERATIONAL", "Kullanımdaki veya iade edilmemiş kart düzenlenemez."); const number = requireText(input.cardNumber, "Kart numarası zorunludur."); const saved = await this.repository.saveCard({ id, cardNumber: number, cardNumberNormalized: normalizeCardNumber(number) }); return saved.status === (input.active ? "AVAILABLE" : "DISABLED") ? saved : this.repository.setCardStatus(id, input.active ? "AVAILABLE" : "DISABLED") }
-  async setCardActive(id: string, active: boolean) { const card = await this.requireCard(id); if (!['AVAILABLE', 'DISABLED'].includes(card.status)) throw new ApiError(409, "CARD_OPERATIONAL", "Kullanımdaki veya iade edilmemiş kartın durumu değiştirilemez."); return this.repository.setCardStatus(id, active ? "AVAILABLE" : "DISABLED") }
-  async markCardLost(id: string) { const card = await this.requireCard(id); if (card.status !== "NOT_RETURNED") throw new ApiError(409, "INVALID_CARD_TRANSITION", "Yalnız iade edilmemiş kart kayıp işaretlenebilir."); return this.repository.setCardStatus(id, "LOST") }
-  async restoreCard(id: string) { const card = await this.requireCard(id); if (card.status !== "LOST") throw new ApiError(409, "INVALID_CARD_TRANSITION", "Yalnız kayıp kart geri alınabilir."); return this.repository.setCardStatus(id, "AVAILABLE") }
+  async updateCard(id: string, input: { cardNumber: string; active: boolean }) {
+    const card = await this.requireCard(id)
+    if (!["AVAILABLE", "DISABLED"].includes(card.status)) throw new ApiError(409, "CARD_OPERATIONAL", "Kullanımdaki veya iade edilmemiş kart düzenlenemez.")
+    const number = requireText(input.cardNumber, "Kart numarası zorunludur.")
+    return this.runCardMutation(() => this.repository.updateCard(id, { cardNumber: number, cardNumberNormalized: normalizeCardNumber(number), status: input.active ? "AVAILABLE" : "DISABLED" }, this.expectedCardState(card)))
+  }
+  async setCardActive(id: string, active: boolean) {
+    const card = await this.requireCard(id)
+    if (!["AVAILABLE", "DISABLED"].includes(card.status)) throw new ApiError(409, "CARD_OPERATIONAL", "Kullanımdaki veya iade edilmemiş kartın durumu değiştirilemez.")
+    return this.runCardMutation(() => this.repository.setCardStatus(id, active ? "AVAILABLE" : "DISABLED", this.expectedCardState(card)))
+  }
+  async markCardLost(id: string) {
+    const card = await this.requireCard(id)
+    if (card.status !== "NOT_RETURNED") throw new ApiError(409, "INVALID_CARD_TRANSITION", "Yalnız iade edilmemiş kart kayıp işaretlenebilir.")
+    return this.runCardMutation(() => this.repository.setCardStatus(id, "LOST", this.expectedCardState(card)))
+  }
+  async restoreCard(id: string) {
+    const card = await this.requireCard(id)
+    if (card.status !== "LOST") throw new ApiError(409, "INVALID_CARD_TRANSITION", "Yalnız kayıp kart geri alınabilir.")
+    return this.runCardMutation(() => this.repository.setCardStatus(id, "AVAILABLE", this.expectedCardState(card)))
+  }
 
   async getAvailableCards() { return (await this.repository.listCards()).filter((card) => card.status === "AVAILABLE") }
 
@@ -237,12 +254,20 @@ export class VisitorOperationsService {
     if (result.hostEmail && result.hostName) this.sendHostNotification(result.visit, result.hostEmail, result.hostName)
     return result.visit
   }
-  async checkOutVisit(id: string, cardReturned: boolean, ctx: AccessContext) { const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); this.requireStatus(visit, "CHECKED_IN", "Yalnızca içerideki ziyaretçiler çıkış yapabilir."); await this.repository.checkOut(id, cardReturned, this.now()); return this.requireVisit(id) }
+  async checkOutVisit(id: string, cardReturned: boolean, ctx: AccessContext) {
+    const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); this.requireStatus(visit, "CHECKED_IN", "Yalnızca içerideki ziyaretçiler çıkış yapabilir.")
+    await this.runCardMutation(() => this.repository.checkOut(id, cardReturned, this.now()))
+    return this.requireVisit(id)
+  }
   /** Unreturned-card follow-up is confined to the Security user's own company/facility scope. */
   async listUnreturnedIssues(ctx: AccessContext) {
     return (await this.repository.listUnreturnedIssues()).filter((issue) => scopeAllows(ctx, { companyId: issue.visit.meeting.hostCompanyId, facilityId: issue.visit.meeting.facilityId }))
   }
-  async receiveLateCardReturn(id: string, ctx: AccessContext) { const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); await this.repository.lateReturn(id, this.now()); return this.requireVisit(id) }
+  async receiveLateCardReturn(id: string, ctx: AccessContext) {
+    const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting)
+    await this.runCardMutation(() => this.repository.lateReturn(id, this.now()))
+    return this.requireVisit(id)
+  }
   async createAndCheckInUnplanned(input: CreateUnplannedInput, ctx: AccessContext) {
     const actor = await this.requireActor(ctx.userId)
     // The company/facility come from the client's scope context and are NOT trusted: they must
@@ -251,7 +276,12 @@ export class VisitorOperationsService {
     const clean: CreateUnplannedInput = { ...input, firstName: requireText(input.firstName, "Ad zorunludur."), lastName: requireText(input.lastName, "Soyad zorunludur."), company: requireText(input.company, "Ziyaretçi şirketi zorunludur."), hostEmployeeName: requireText(input.hostEmployeeName, "Ev sahibi zorunludur."), visitTypeId: input.visitTypeId.trim(), vehiclePlate: normalizePlate(input.vehiclePlate) }
     if (!clean.rulesAccepted || !Number.isInteger(clean.durationMinutes) || clean.durationMinutes <= 0) throw new ApiError(400, "VALIDATION_ERROR", "Kural kabulü ve pozitif tahmini süre zorunludur.")
     const type = await this.requireVisitType(clean.visitTypeId); if (!type.active) throw new ApiError(409, "INACTIVE_VISIT_TYPE", "Pasif ziyaret türü seçilemez.")
-    return this.repository.createUnplanned(clean, actor.id, this.now())
+    try {
+      return await this.repository.createUnplanned(clean, actor.id, this.now())
+    } catch (error) {
+      if (error instanceof CheckInConflictError) throw new ApiError(409, "CHECK_IN_CONFLICT", "Ziyaret veya kart durumu değişti. Güncel durumu kontrol edip yeniden deneyin.")
+      throw error
+    }
   }
   async correctVisitor(id: string, input: SecurityCorrectionInput, ctx: AccessContext) {
     const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); if (!["PLANNED", "CHECKED_IN"].includes(visit.status)) throw new ApiError(409, "VISIT_NOT_EDITABLE", "Yalnızca planlanmış veya içerideki ziyaretler düzeltilebilir.")
@@ -278,6 +308,18 @@ export class VisitorOperationsService {
   private async requireVisitType(id: string) { const type = await this.repository.findVisitType(id); if (!type) throw new ApiError(404, "NOT_FOUND", "Ziyaret türü bulunamadı."); return type }
   private async requireVisit(id: string) { const visit = await this.repository.findVisit(id); if (!visit) throw new ApiError(404, "NOT_FOUND", "Ziyaret bulunamadı."); return visit }
   private async requireCard(id: string) { const card = await this.repository.findCard(id); if (!card) throw new ApiError(404, "NOT_FOUND", "Ziyaretçi kartı bulunamadı."); return card }
+  private expectedCardState(card: VisitorCardDto) { return { status: card.status, currentVisitId: card.assignedVisitId ?? null } }
+  private async runCardMutation<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!(error instanceof VisitorCardConflictError)) throw error
+      if (error.reason === "INVALID_CHECKOUT_STATE") throw new ApiError(409, "INVALID_VISIT_TRANSITION", "Ziyaretin mevcut durumu çıkış işlemiyle uyumlu değil.")
+      if (error.reason === "INVALID_LATE_RETURN_STATE") throw new ApiError(409, "INVALID_CARD_TRANSITION", "Ziyaretin mevcut durumu geç kart iadesiyle uyumlu değil.")
+      if (error.reason === "INVALID_CARD_ASSIGNMENT") throw new ApiError(409, "CARD_ASSIGNMENT_CONFLICT", "Ziyaretçi kartı ataması güncel ziyaretle eşleşmiyor.")
+      throw new ApiError(409, "CARD_STATE_CONFLICT", "Ziyaretçi kartının durumu değişti. Güncel durumu kontrol edip yeniden deneyin.")
+    }
+  }
   private requireStatus(visit: VisitDto, status: string, message: string) { if (visit.status !== status) throw new ApiError(409, "INVALID_VISIT_TRANSITION", message) }
   private assertTimes(start: string, end: string) { const startAt = new Date(start), endAt = new Date(end); if (!Number.isFinite(startAt.getTime()) || !Number.isFinite(endAt.getTime()) || endAt <= startAt) throw new ApiError(400, "VALIDATION_ERROR", "Planlanan başlangıç ve bitiş zamanı geçerli ve sıralı olmalıdır.") }
   private assertManualLifecycle(meeting: { hostEmployeeId?: string; plannedStart: string; actualMeetingEnd?: string }, visits: VisitDto[], actorId: string, now: Date) { if (meeting.hostEmployeeId !== actorId) throw new ApiError(403, "NOT_HOST", "Bu toplantının yaşam döngüsü aksiyonlarını yalnızca ev sahibi kullanabilir."); if (meeting.actualMeetingEnd) throw new ApiError(409, "MEETING_CLOSED", "Toplantı zaten kapatılmış."); if (now < new Date(meeting.plannedStart)) throw new ApiError(409, "MEETING_NOT_STARTED", "Toplantı başlamadan yaşam döngüsü aksiyonu uygulanamaz."); if (!visits.some((visit) => !terminal.has(visit.status))) throw new ApiError(409, "MEETING_TERMINAL", "Tüm ziyaretleri tamamlanmış toplantı değiştirilemez.") }
