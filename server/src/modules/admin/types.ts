@@ -2,6 +2,12 @@ import { applicationRoles, parseApplicationRole, type ApplicationRole } from "..
 
 export { applicationRoles, type ApplicationRole }
 
+export const employeeProfileRoles = ["EMPLOYEE", "MANAGER", "SECURITY"] as const
+
+export function roleRequiresEmployeeProfile(role: ApplicationRole): boolean {
+  return employeeProfileRoles.includes(role as (typeof employeeProfileRoles)[number])
+}
+
 export interface AuthorizationScope {
   companyIds: string[]
   facilityIds: string[]

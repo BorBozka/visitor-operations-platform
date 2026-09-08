@@ -13,7 +13,9 @@ import {
   normalizeVisitTypeName,
   isSelfAdminDemotionAttempt,
   isSelfDeactivationAttempt,
+  provisionEmployeeFacilityScope,
   requiresCompanyScope,
+  roleRequiresEmployeeProfile,
   wouldRemoveLastActiveAdmin,
   type AdminUser,
 } from "@/domain/admin"
@@ -27,13 +29,27 @@ const users: AdminUser[] = [
 ]
 
 describe("Company scope requirement", () => {
-  it("requires at least one company for every current role, including Admin", () => {
+  it("requires at least one company for every current role and exactly one facility for operational roles", () => {
     for (const role of ["EMPLOYEE", "MANAGER", "SECURITY", "ADMIN"] as const) {
       expect(requiresCompanyScope(role)).toBe(true)
       expect(isAuthorizationScopeValid(role, scope([]))).toBe(false)
-      expect(isAuthorizationScopeValid(role, scope(["a"]))).toBe(true)
-      expect(isAuthorizationScopeValid(role, scope(["a", "b"]))).toBe(true)
+      expect(isAuthorizationScopeValid(role, scope(["a"]))).toBe(role === "ADMIN")
+      expect(isAuthorizationScopeValid(role, { ...scope(["a"]), facilityIds: ["facility-a"] })).toBe(true)
     }
+  })
+
+  it("automatically binds operational roles to the sole facility without adding a separate form field", () => {
+    const facilities = [{ id: "facility-a", parentId: "a" }, { id: "facility-b", parentId: "b" }]
+    const assigned = provisionEmployeeFacilityScope("SECURITY", scope(["a"]), facilities)
+    expect(assigned.facilityIds).toEqual(["facility-a"])
+    expect(roleRequiresEmployeeProfile("SECURITY")).toBe(true)
+    expect(provisionEmployeeFacilityScope("ADMIN", scope(["a"]), facilities).facilityIds).toEqual([])
+  })
+
+  it("preserves one existing operational facility when the authorization scope spans companies", () => {
+    const facilities = [{ id: "facility-a", parentId: "a" }, { id: "facility-b", parentId: "b" }]
+    const assigned = provisionEmployeeFacilityScope("MANAGER", { ...scope(["a", "b"]), facilityIds: ["facility-b"] }, facilities)
+    expect(assigned.facilityIds).toEqual(["facility-b"])
   })
 })
 

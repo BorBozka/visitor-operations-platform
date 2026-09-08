@@ -3,8 +3,8 @@ import { normalizeIdentity } from "../../lib/names.js"
 import { isScopeWithin } from "../../lib/scope.js"
 import type { AccessContext } from "../../lib/authorization.js"
 import { hashPassword } from "../../auth/password.js"
-import type { AdminRepository, PersistedAdminUserInput } from "../../repositories/admin-repository.js"
-import type { AdminUser, AuthorizationScope, CreateAdminUserInput, UpdateAdminUserInput } from "./types.js"
+import { EmployeeProvisioningScopeError, type AdminRepository, type PersistedAdminUserInput } from "../../repositories/admin-repository.js"
+import { roleRequiresEmployeeProfile, type AdminUser, type AuthorizationScope, type CreateAdminUserInput, type UpdateAdminUserInput } from "./types.js"
 
 function uniqueIds(values: string[]) { return [...new Set(values)] }
 function normalizedScope(scope: AuthorizationScope): AuthorizationScope { return { companyIds: uniqueIds(scope.companyIds), facilityIds: uniqueIds(scope.facilityIds), securityGateIds: uniqueIds(scope.securityGateIds) } }
@@ -37,8 +37,9 @@ export class AdminService {
   async createUser(input: CreateAdminUserInput, ctx: AccessContext): Promise<AdminUser> {
     const user = this.validateCreate(input)
     await this.assertIdentityAvailable(user.usernameNormalized, user.emailNormalized)
-    await this.validateScope(input.role, input.authorizationScope, ctx)
-    return this.repository.createLocalUser({ ...user, passwordHash: await hashPassword(input.password), scope: normalizedScope(input.authorizationScope) })
+    const scope = await this.validateScope(input.role, input.authorizationScope, ctx)
+    const passwordHash = await hashPassword(input.password)
+    return this.withProvisioningError(() => this.repository.createLocalUser({ ...user, passwordHash, scope }))
   }
 
   async updateUser(id: string, input: UpdateAdminUserInput, ctx: AccessContext): Promise<AdminUser> {
@@ -53,10 +54,10 @@ export class AdminService {
     const usernameNormalized = normalizeIdentity(next.username)
     const emailNormalized = normalizeIdentity(next.email)
     await this.assertIdentityAvailable(usernameNormalized, emailNormalized, id)
-    await this.validateScope(next.role, next.authorizationScope, ctx)
-    const persisted: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope } = { role: next.role, active: next.active, scope: normalizedScope(next.authorizationScope) }
+    const scope = await this.validateScope(next.role, next.authorizationScope, ctx)
+    const persisted: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope } = { role: next.role, active: next.active, scope }
     if (existing.authenticationSource === "LOCAL") Object.assign(persisted, { fullName: next.fullName, username: next.username, usernameNormalized, email: next.email, emailNormalized })
-    return this.repository.updateUser(id, persisted)
+    return this.withProvisioningError(() => this.repository.updateUser(id, persisted))
   }
 
   async resetLocalUserPassword(id: string, password: string, ctx: AccessContext): Promise<void> {
@@ -78,7 +79,7 @@ export class AdminService {
     if (email && email.id !== excludeId) throw new ApiError(409, "EMAIL_TAKEN", "Bu e-posta adresi zaten kullanılıyor.")
   }
 
-  private async validateScope(role: AdminUser["role"], scope: AuthorizationScope, ctx: AccessContext) {
+  private async validateScope(role: AdminUser["role"], scope: AuthorizationScope, ctx: AccessContext): Promise<AuthorizationScope> {
     const normalized = normalizedScope(scope)
     if (normalized.companyIds.length === 0) throw new ApiError(400, "VALIDATION_ERROR", "En az bir şirket kapsamı seçilmelidir.")
     // Existence alone is not authority: the scope being written must also sit inside the acting
@@ -87,7 +88,21 @@ export class AdminService {
     const found = await this.repository.findScopeReferences(normalized)
     if (found.companyIds.length !== normalized.companyIds.length || found.facilities.length !== normalized.facilityIds.length || found.gates.length !== normalized.securityGateIds.length) throw new ApiError(400, "INVALID_SCOPE", "Kapsamda bilinmeyen organizasyon kaydı bulunuyor.")
     if (found.facilities.some((facility) => !normalized.companyIds.includes(facility.companyId)) || found.gates.some((gate) => !normalized.companyIds.includes(gate.companyId))) throw new ApiError(400, "INVALID_SCOPE", "Tesis ve güvenlik kapısı kapsamı seçili şirket kapsamıyla uyumlu olmalıdır.")
-    void role
+    if (roleRequiresEmployeeProfile(role) && normalized.facilityIds.length !== 1) throw this.employeeFacilityScopeError()
+    return normalized
+  }
+
+  private employeeFacilityScopeError() {
+    return new ApiError(400, "EMPLOYEE_FACILITY_SCOPE_REQUIRED", "Çalışan profili gerektiren roller için tam olarak bir tesis kapsamı seçilmelidir.")
+  }
+
+  private async withProvisioningError<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (error instanceof EmployeeProvisioningScopeError) throw this.employeeFacilityScopeError()
+      throw error
+    }
   }
 
   /** An account outside the acting Admin's authority is reported as absent, never as forbidden. */

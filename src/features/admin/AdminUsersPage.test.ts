@@ -188,11 +188,14 @@ describe("AdminUsersPage local user dialog", () => {
     expect(componentSource).toContain("Bu e-posta adresi zaten kullanılıyor.")
   })
 
-  it("requires at least one company in scope before saving, but only reveals the error after the field is touched or a submit is attempted", () => {
+  it("requires a valid company/facility scope before saving, but only reveals the error after the field is touched or a submit is attempted", () => {
     expect(componentSource).toContain("isAuthorizationScopeValid(value.role, value.authorizationScope)")
     expect(componentSource).toContain("En az bir şirket seçilmelidir.")
+    expect(componentSource).toContain("Operasyonel roller için kapsam tam olarak bir tesis içermelidir.")
+    expect(componentSource).toContain("provisionEmployeeFacilityScope")
+    expect(componentSource).not.toContain("Ana tesis")
     expect(componentSource).toContain("const showScopeError = (scopeTouched || submitAttempted) && !scopeValid")
-    expect(componentSource).toContain('error={showScopeError ? "En az bir şirket seçilmelidir." : undefined}')
+    expect(componentSource).toContain("error={showScopeError ? scopeError : undefined}")
     expect(componentSource).not.toContain('error={!scopeValid ? "En az bir şirket seçilmelidir." : undefined}')
     expect(componentSource).toContain("setScopeTouched(true)")
     expect(componentSource).toContain("setSubmitAttempted(true)")

@@ -171,6 +171,13 @@ Authorization is derived from the authenticated session on the server. Role and 
 facility, and security-gate scopes are enforced for reads and mutations; client-supplied actor or
 scope identifiers are not trusted as authorization proof.
 
+LOCAL users in the `EMPLOYEE`, `MANAGER`, or `SECURITY` roles are provisioned with an operational
+Employee identity in the same transaction as the User and authorization scope. Their scope must
+contain exactly one facility; the Employee's company is derived from that facility on the server.
+`ADMIN` users do not require an Employee identity. The Admin user form does not introduce a
+separate “primary facility” field: this product is deployed for one operational facility, and a
+different facility uses a separate installation.
+
 ### Account self-service UI
 
 All authenticated role shells expose the same account menu with the current user's avatar,

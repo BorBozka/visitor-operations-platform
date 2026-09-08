@@ -17,6 +17,8 @@ import {
   isAdminEmailTaken,
   isAdminUsernameTaken,
   isAuthorizationScopeValid,
+  provisionEmployeeFacilityScope,
+  roleRequiresEmployeeProfile,
   type AdminUser,
   type ApplicationRole,
   type AuthenticationSource,
@@ -48,14 +50,14 @@ import { useAdmin } from "@/features/admin/admin-context"
 import { cn } from "@/lib/utils"
 import { adminService } from "@/services"
 
-const emptyLocalUserDraft = (): AdminUser => ({
+const emptyLocalUserDraft = (facilities: { id: string; parentId?: string }[]): AdminUser => ({
   id: "",
   fullName: "",
   username: "",
   email: "",
   authenticationSource: "LOCAL",
   role: "EMPLOYEE",
-  authorizationScope: { companyIds: [], facilityIds: [], securityGateIds: [] },
+  authorizationScope: provisionEmployeeFacilityScope("EMPLOYEE", { companyIds: [], facilityIds: [], securityGateIds: [] }, facilities),
   active: true,
 })
 
@@ -64,6 +66,7 @@ export function AdminUsersPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null)
   const companies = useMemo(() => organization?.companies.map((company) => ({ id: company.id, name: company.name })) ?? [], [organization])
+  const facilities = useMemo(() => organization?.facilities.map((facility) => ({ id: facility.id, parentId: facility.parentId })) ?? [], [organization])
 
   const { filters, sort, page } = useMemo(() => parseAdminUsersQuery(searchParams), [searchParams])
   const filteredUsers = useMemo(() => filterAndSortAdminUsers(users, filters, sort, companies), [users, filters, sort, companies])
@@ -104,7 +107,7 @@ export function AdminUsersPage() {
           {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
         </Select>
         {activeFilters && <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 gap-1 px-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800" onClick={clearFilters}><FilterX className="size-3.5" />Filtreleri temizle</Button>}
-        <Button size="sm" className="ml-auto shrink-0" onClick={() => setSelectedUser(emptyLocalUserDraft())}><Plus />Local kullanıcı</Button>
+        <Button size="sm" className="ml-auto shrink-0" onClick={() => setSelectedUser(emptyLocalUserDraft(facilities))}><Plus />Local kullanıcı</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto scrollbar-thin">
         {filteredUsers.length === 0 ? (
@@ -145,7 +148,7 @@ export function AdminUsersPage() {
       </div>
       <PaginationFooter page={safePage} pageCount={pageCount} visibleStart={filteredUsers.length ? (safePage - 1) * ADMIN_USERS_PAGE_SIZE + 1 : 0} visibleEnd={Math.min(safePage * ADMIN_USERS_PAGE_SIZE, filteredUsers.length)} total={filteredUsers.length} visiblePageNumbers={Array.from({ length: Math.min(3, pageCount) }, (_, index) => Math.max(1, Math.min(safePage - 1, pageCount - 2)) + index)} onPageChange={setPage} ariaLabel="Kullanıcı sayfaları" />
     </section>
-    <UserDialog user={selectedUser} users={users} companies={companies} onOpenChange={(open) => !open && setSelectedUser(null)} onSaved={() => void reload()} />
+    <UserDialog user={selectedUser} users={users} companies={companies} facilities={facilities} onOpenChange={(open) => !open && setSelectedUser(null)} onSaved={() => void reload()} />
   </div>
 }
 
@@ -162,7 +165,7 @@ function EmptyAdminUsersState({ hasFilters }: { hasFilters: boolean }) {
   )
 }
 
-function UserDialog({ user, users, companies, onOpenChange, onSaved }: { user: AdminUser | null; users: AdminUser[]; companies: { id: string; name: string }[]; onOpenChange(open: boolean): void; onSaved(): void }) {
+function UserDialog({ user, users, companies, facilities, onOpenChange, onSaved }: { user: AdminUser | null; users: AdminUser[]; companies: { id: string; name: string }[]; facilities: { id: string; parentId?: string }[]; onOpenChange(open: boolean): void; onSaved(): void }) {
   const [draft, setDraft] = useState<AdminUser | null>(null)
   const [temporaryPassword, setTemporaryPassword] = useState("")
   const [temporaryPasswordConfirm, setTemporaryPasswordConfirm] = useState("")
@@ -174,9 +177,16 @@ function UserDialog({ user, users, companies, onOpenChange, onSaved }: { user: A
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const open = Boolean(user)
   const value = draft && user && draft.id === user.id ? draft : user
-  const setValue = (change: Partial<AdminUser>) => { setServerError(null); setResetSuccess(false); if (value) setDraft({ ...value, ...change }) }
+  const setValue = (change: Partial<AdminUser>) => {
+    setServerError(null)
+    setResetSuccess(false)
+    if (value) {
+      const next = { ...value, ...change }
+      setDraft({ ...next, authorizationScope: provisionEmployeeFacilityScope(next.role, next.authorizationScope, facilities) })
+    }
+  }
 
-  useEffect(() => { setTemporaryPassword(""); setTemporaryPasswordConfirm(""); setShowPassword(false); setResetPasswordOpen(false); setResetSuccess(false); setServerError(null); setScopeTouched(false); setSubmitAttempted(false) }, [user])
+  useEffect(() => { setDraft(user ? { ...user, authorizationScope: provisionEmployeeFacilityScope(user.role, user.authorizationScope, facilities) } : null); setTemporaryPassword(""); setTemporaryPasswordConfirm(""); setShowPassword(false); setResetPasswordOpen(false); setResetSuccess(false); setServerError(null); setScopeTouched(false); setSubmitAttempted(false) }, [facilities, user])
 
   const isCreating = value?.id === ""
   const adOwned = value?.authenticationSource === "ACTIVE_DIRECTORY"
@@ -185,6 +195,11 @@ function UserDialog({ user, users, companies, onOpenChange, onSaved }: { user: A
   const usernameTaken = value ? isAdminUsernameTaken(users, value.id || null, value.username) : false
   const emailTaken = value ? isAdminEmailTaken(users, value.id || null, value.email) : false
   const scopeValid = value ? isAuthorizationScopeValid(value.role, value.authorizationScope) : false
+  const scopeError = value?.authorizationScope.companyIds.length === 0
+    ? "En az bir şirket seçilmelidir."
+    : value && roleRequiresEmployeeProfile(value.role) && value.authorizationScope.facilityIds.length !== 1
+      ? "Operasyonel roller için kapsam tam olarak bir tesis içermelidir."
+      : undefined
   const passwordsMatch = doPasswordsMatch(temporaryPassword, temporaryPasswordConfirm)
   const passwordValid = !isCreating || (isTemporaryPasswordValid(temporaryPassword) && passwordsMatch)
 
@@ -264,7 +279,7 @@ function UserDialog({ user, users, companies, onOpenChange, onSaved }: { user: A
             </Field>
           </>}
           <Field label="Rol" className="sm:col-span-2"><Select value={value.role} disabled={isSelf && user?.role === "ADMIN"} title={isSelf && user?.role === "ADMIN" ? "Kendi Admin rolünüzü burada değiştiremezsiniz." : undefined} onChange={(event) => setValue({ role: event.target.value as ApplicationRole })}>{applicationRoles.map((role) => <option key={role} value={role}>{applicationRoleLabels[role]}</option>)}</Select></Field>
-          <Field label="Şirket kapsamı" className="sm:col-span-2" error={showScopeError ? "En az bir şirket seçilmelidir." : undefined}>
+          <Field label="Şirket kapsamı" className="sm:col-span-2" error={showScopeError ? scopeError : undefined}>
             <div className="flex max-h-28 flex-col gap-1.5 overflow-y-auto sm:flex-row sm:flex-wrap sm:gap-x-4 sm:gap-y-1.5">
               {companies.map((company) => <label key={company.id} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={value.authorizationScope.companyIds.includes(company.id)} onChange={(event) => { setScopeTouched(true); setValue({ authorizationScope: { ...value.authorizationScope, companyIds: event.target.checked ? [...value.authorizationScope.companyIds, company.id] : value.authorizationScope.companyIds.filter((id) => id !== company.id) } }) }} />{company.name}</label>)}
             </div>

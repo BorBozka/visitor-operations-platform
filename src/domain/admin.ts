@@ -4,10 +4,9 @@ export type ApplicationRole = (typeof applicationRoles)[number]
 export const authenticationSources = ["ACTIVE_DIRECTORY", "LOCAL"] as const
 export type AuthenticationSource = (typeof authenticationSources)[number]
 
-// Scoped identifiers this user's access is restricted to. companyIds is the only dimension any
-// screen reads or edits today; facilityIds/securityGateIds exist so a future facility- or
-// security-gate-level restriction (e.g. for the Güvenlik role) can be added without another
-// breaking change to AdminUser.
+// Scoped identifiers this user's access is restricted to. The Admin form edits companyIds
+// directly and derives the single operational facilityId from the deployment's organization
+// data; securityGateIds remains available for narrower server-managed scope.
 export interface AuthorizationScope {
   companyIds: string[]
   facilityIds: string[]
@@ -44,8 +43,29 @@ export function requiresCompanyScope(role: ApplicationRole): boolean {
   return !COMPANY_SCOPE_EXEMPT_ROLES.includes(role)
 }
 
+export function roleRequiresEmployeeProfile(role: ApplicationRole): boolean {
+  return role === "EMPLOYEE" || role === "MANAGER" || role === "SECURITY"
+}
+
 export function isAuthorizationScopeValid(role: ApplicationRole, scope: AuthorizationScope): boolean {
-  return !requiresCompanyScope(role) || scope.companyIds.length > 0
+  const companyScopeValid = !requiresCompanyScope(role) || scope.companyIds.length > 0
+  return companyScopeValid && (!roleRequiresEmployeeProfile(role) || scope.facilityIds.length === 1)
+}
+
+export function provisionEmployeeFacilityScope(
+  role: ApplicationRole,
+  scope: AuthorizationScope,
+  facilities: { id: string; parentId?: string }[],
+): AuthorizationScope {
+  if (!roleRequiresEmployeeProfile(role)) return scope
+  const selectedFacilities = facilities.filter((facility) => facility.parentId && scope.companyIds.includes(facility.parentId))
+  const currentFacilityIds = scope.facilityIds.filter((id) => selectedFacilities.some((facility) => facility.id === id))
+  const facilityIds = currentFacilityIds.length === 1
+    ? currentFacilityIds
+    : selectedFacilities.length === 1
+      ? [selectedFacilities[0].id]
+      : []
+  return { ...scope, facilityIds }
 }
 
 // Deliberately locale-independent: usernames/emails are ASCII identifiers, not natural-language

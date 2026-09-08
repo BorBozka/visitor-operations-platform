@@ -756,6 +756,10 @@ Modules:
 - Rule Versions
 - Settings
 
+The user dialog does not add a separate primary-facility control. For `EMPLOYEE`, `MANAGER`, and
+`SECURITY`, the existing authorization scope carries the deployment's single facility
+automatically; `ADMIN` remains a User-only identity.
+
 Settings include:
 - overdue tolerance,
 - overdue alert repeat interval.

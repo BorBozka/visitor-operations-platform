@@ -64,6 +64,8 @@ backend, infrastructure, Active Directory, or deployment scope is implied by tha
   operations, and typed resource-catalog APIs.
 - Enforced company/facility relationships, LOCAL identity rules, last-admin/self-lockout guards,
   resource type invariants, and server-owned validation.
+- Operational LOCAL roles are provisioned atomically with their Employee identity and single
+  facility binding; pure Admin accounts remain User-only and role changes retain Employee history.
 
 ## Backend Phase 3 — Visitor operations
 

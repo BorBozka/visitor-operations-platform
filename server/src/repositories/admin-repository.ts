@@ -1,5 +1,12 @@
 import type { AdminUser, AuthorizationScope } from "../modules/admin/types.js"
 
+export class EmployeeProvisioningScopeError extends Error {
+  constructor() {
+    super("Employee provisioning requires one facility whose company is inside the user scope.")
+    this.name = "EmployeeProvisioningScopeError"
+  }
+}
+
 export interface PersistedAdminUserInput {
   fullName: string
   username: string

@@ -125,7 +125,7 @@ and `securityGateIds` arrays. Password hashes are never returned.
   "email": "yeni@example.com",
   "password": "en-az-sekiz-karakter",
   "role": "SECURITY",
-  "authorizationScope": { "companyIds": ["bplas"], "facilityIds": [], "securityGateIds": [] },
+  "authorizationScope": { "companyIds": ["bplas"], "facilityIds": ["bplas-merkez"], "securityGateIds": [] },
   "active": true
 }
 ```
@@ -138,7 +138,12 @@ and `securityGateIds` arrays. Password hashes are never returned.
 
 New users are always `LOCAL`; Active Directory creation/integration is not exposed. Scope
 references and their company relationships are validated, and self-lockout/last-active-Admin
-changes are rejected.
+changes are rejected. `EMPLOYEE`, `MANAGER`, and `SECURITY` require exactly one facility scope.
+The User, its scope rows, Employee profile, and Employee facility scope are provisioned in one
+transaction; Employee `companyId` comes from the persisted Facility parent. `ADMIN` creates no
+Employee profile. Role changes preserve an existing Employee row for history, synchronize its
+name, keep it active only while the User has an Employee-requiring role, and create/reactivate the
+same operational identity transactionally when needed.
 
 ## Operational settings
 
