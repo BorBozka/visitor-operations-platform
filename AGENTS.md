@@ -50,8 +50,8 @@ Vitest has no separate config file and no jsdom/`@testing-library` setup — see
   `transport-assignments.ts`, `goods-movements.ts`). No logic beyond small label/derivation
   helpers (e.g. `getGoodsMovementDisplayStatus`).
 - `src/services/*` — domain service interfaces plus `http/Http*` production adapters.
-  `src/services/index.ts` wires only HTTP adapters; `Mock*` implementations remain as
-  deterministic unit/component test fixtures and are not a runtime fallback.
+  `src/services/index.ts` wires only HTTP adapters. Unit/component tests use focused local
+  fixtures, fakes, or stubs; there is no alternate application runtime composition.
 - `src/features/<domain>/*` — UI + feature-local logic (filtering, sorting, pagination,
   export), grouped by domain: `visits`, `manager`, `resources`, `transport`, `goods`, `reports`.
 - `src/components/app-shell/*` — Employee, Manager/Admin, and Security route shells (see Routing).

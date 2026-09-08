@@ -32,7 +32,7 @@ export function VisitProvider({ service, children }: { service: VisitService; ch
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    // Identity is resolved per signed-in user (server-side in api mode, session-derived in demo).
+    // Identity is resolved server-side for the signed-in user.
     // Skip while signed out and re-run when the user changes so stale data never leaks across logins.
     if (!currentUserId) {
       setMeetings([])

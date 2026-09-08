@@ -1039,4 +1039,4 @@ The project is developed module by module.
 
 The product was delivered incrementally: production-oriented UI/domain boundaries first, then
 Fastify/Prisma/MSSQL persistence and HTTP integration. Runtime service composition now uses only
-real HTTP adapters; deterministic mock services remain solely where tests require fixtures.
+real HTTP adapters; tests use focused local fixtures, fakes, or stubs where isolation requires them.

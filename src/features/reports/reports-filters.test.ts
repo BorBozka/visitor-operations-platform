@@ -25,7 +25,7 @@ import {
   updateRecordsReportSearchParams,
   updateReportsSearchParams,
 } from "@/features/reports/reports-filters"
-import { mockVisitReferenceData } from "@/services/mock-visit-data"
+import { visitReferenceDataFixture } from "@/test/fixtures/visit-reference-data"
 
 const now = new Date("2026-08-17T12:00:00+03:00")
 
@@ -79,61 +79,61 @@ describe("getPreviousPeriod", () => {
 
 describe("parseReportsQuery", () => {
   it("defaults to the visits tab, last-30-days range and unscoped company/facility", () => {
-    const state = parseReportsQuery(new URLSearchParams(""), mockVisitReferenceData, now)
+    const state = parseReportsQuery(new URLSearchParams(""), visitReferenceDataFixture, now)
     expect(state.tab).toBe("visits")
     expect(state).toMatchObject({ view: "analysis", page: 1, comparison: "none", granularity: "daily" })
     expect(state.filters).toEqual({ startDate: "2026-07-19", endDate: "2026-08-17", companyId: "all", facilityId: "all" })
   })
 
   it("falls back to the visits tab for unknown or disabled tab values", () => {
-    expect(parseReportsQuery(new URLSearchParams("tab=unknown"), mockVisitReferenceData, now).tab).toBe("visits")
-    expect(parseReportsQuery(new URLSearchParams("tab=vehicle"), mockVisitReferenceData, now).tab).toBe("vehicle")
-    expect(parseReportsQuery(new URLSearchParams("tab=goods"), mockVisitReferenceData, now).tab).toBe("goods")
+    expect(parseReportsQuery(new URLSearchParams("tab=unknown"), visitReferenceDataFixture, now).tab).toBe("visits")
+    expect(parseReportsQuery(new URLSearchParams("tab=vehicle"), visitReferenceDataFixture, now).tab).toBe("vehicle")
+    expect(parseReportsQuery(new URLSearchParams("tab=goods"), visitReferenceDataFixture, now).tab).toBe("goods")
   })
 
   it("uses the explicit range once either boundary is provided, leaving the other open", () => {
-    const both = parseReportsQuery(new URLSearchParams("from=2026-08-01&to=2026-08-05"), mockVisitReferenceData, now)
+    const both = parseReportsQuery(new URLSearchParams("from=2026-08-01&to=2026-08-05"), visitReferenceDataFixture, now)
     expect(both.filters).toMatchObject({ startDate: "2026-08-01", endDate: "2026-08-05" })
 
-    const openEnded = parseReportsQuery(new URLSearchParams("from=2026-08-01"), mockVisitReferenceData, now)
+    const openEnded = parseReportsQuery(new URLSearchParams("from=2026-08-01"), visitReferenceDataFixture, now)
     expect(openEnded.filters).toMatchObject({ startDate: "2026-08-01", endDate: "" })
 
-    const invalid = parseReportsQuery(new URLSearchParams("from=not-a-date"), mockVisitReferenceData, now)
+    const invalid = parseReportsQuery(new URLSearchParams("from=not-a-date"), visitReferenceDataFixture, now)
     expect(invalid.filters).toMatchObject({ startDate: "2026-07-19", endDate: "2026-08-17" })
   })
 
   it("clamps a future end date from the URL to today, since reports are historical", () => {
-    const future = parseReportsQuery(new URLSearchParams("from=2026-08-01&to=2099-01-01"), mockVisitReferenceData, now)
+    const future = parseReportsQuery(new URLSearchParams("from=2026-08-01&to=2099-01-01"), visitReferenceDataFixture, now)
     expect(future.filters).toMatchObject({ startDate: "2026-08-01", endDate: "2026-08-17" })
   })
 
   it("validates company and clears a facility that no longer matches the company", () => {
-    const scoped = parseReportsQuery(new URLSearchParams("company=bplas&facility=otomotiv-uretim"), mockVisitReferenceData, now)
+    const scoped = parseReportsQuery(new URLSearchParams("company=bplas&facility=otomotiv-uretim"), visitReferenceDataFixture, now)
     expect(scoped.filters.companyId).toBe("bplas")
     expect(scoped.filters.facilityId).toBe("all")
 
-    const unknownCompany = parseReportsQuery(new URLSearchParams("company=missing"), mockVisitReferenceData, now)
+    const unknownCompany = parseReportsQuery(new URLSearchParams("company=missing"), visitReferenceDataFixture, now)
     expect(unknownCompany.filters.companyId).toBe("all")
   })
 
   it("parses records state from the URL and safely falls back for invalid values", () => {
-    expect(parseReportsQuery(new URLSearchParams("view=records&page=2&comparison=previous&granularity=weekly"), mockVisitReferenceData, now)).toMatchObject({
+    expect(parseReportsQuery(new URLSearchParams("view=records&page=2&comparison=previous&granularity=weekly"), visitReferenceDataFixture, now)).toMatchObject({
       view: "records",
       page: 2,
       comparison: "previous",
       granularity: "weekly",
     })
-    expect(parseReportsQuery(new URLSearchParams("view=unknown&page=0&comparison=other&granularity=monthly"), mockVisitReferenceData, now)).toMatchObject({
+    expect(parseReportsQuery(new URLSearchParams("view=unknown&page=0&comparison=other&granularity=monthly"), visitReferenceDataFixture, now)).toMatchObject({
       view: "analysis",
       page: 1,
       comparison: "none",
       granularity: "daily",
     })
-    expect(parseReportsQuery(new URLSearchParams("tab=vehicle&view=records"), mockVisitReferenceData, now).view).toBe("analysis")
+    expect(parseReportsQuery(new URLSearchParams("tab=vehicle&view=records"), visitReferenceDataFixture, now).view).toBe("analysis")
   })
 
   it("keeps visits records search and sort in their own URL state", () => {
-    const state = parseReportsQuery(new URLSearchParams("view=records&visitSearch=Mehmet%20Kaya&visitSort=visitor&visitDir=desc"), mockVisitReferenceData, now)
+    const state = parseReportsQuery(new URLSearchParams("view=records&visitSearch=Mehmet%20Kaya&visitSort=visitor&visitDir=desc"), visitReferenceDataFixture, now)
     expect(state).toMatchObject({ search: "Mehmet Kaya", sort: { field: "visitor", direction: "desc" } })
     const next = setVisitsReportRecordsWorkspace(new URLSearchParams("page=3&fleetPage=4"), { search: "Ayşe", sort: { field: "status", direction: "asc" } })
     expect(next.get("fleetPage")).toBe("4")
@@ -144,17 +144,17 @@ describe("parseReportsQuery", () => {
   })
 
   it("keeps the records status filter in its own shareable URL key and clears it for all records", () => {
-    expect(parseReportsQuery(new URLSearchParams("view=records&visitStatus=late-arrival"), mockVisitReferenceData, now).recordsStatus).toBe("late-arrival")
-    expect(parseReportsQuery(new URLSearchParams("visitStatus=unknown"), mockVisitReferenceData, now).recordsStatus).toBe("all")
+    expect(parseReportsQuery(new URLSearchParams("view=records&visitStatus=late-arrival"), visitReferenceDataFixture, now).recordsStatus).toBe("late-arrival")
+    expect(parseReportsQuery(new URLSearchParams("visitStatus=unknown"), visitReferenceDataFixture, now).recordsStatus).toBe("all")
     const filtered = setVisitsReportRecordsWorkspace(new URLSearchParams("page=2&visitSearch=Ayşe"), { status: "completed" })
     expect(filtered.toString()).toBe("visitSearch=Ay%C5%9Fe&visitStatus=completed")
     expect(setVisitsReportRecordsWorkspace(filtered, { status: "all" }).toString()).toBe("visitSearch=Ay%C5%9Fe")
   })
 
   it("rejects an incomplete custom comparison from the URL", () => {
-    expect(parseReportsQuery(new URLSearchParams("comparison=custom"), mockVisitReferenceData, now)).toMatchObject({ comparison: "none", compareFrom: null, compareTo: null })
-    expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19"), mockVisitReferenceData, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-08-17" })
-    expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19&compareTo=2025-07-31"), mockVisitReferenceData, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-07-31" })
+    expect(parseReportsQuery(new URLSearchParams("comparison=custom"), visitReferenceDataFixture, now)).toMatchObject({ comparison: "none", compareFrom: null, compareTo: null })
+    expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19"), visitReferenceDataFixture, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-08-17" })
+    expect(parseReportsQuery(new URLSearchParams("comparison=custom&compareFrom=2025-07-19&compareTo=2025-07-31"), visitReferenceDataFixture, now)).toMatchObject({ comparison: "custom", compareFrom: "2025-07-19", compareTo: "2025-07-31" })
   })
 })
 
@@ -164,9 +164,9 @@ describe("report tab strip", () => {
   })
 
   it("keeps visits as the default tab and every tab deep link working after the reorder", () => {
-    expect(parseReportsQuery(new URLSearchParams(""), mockVisitReferenceData, now).tab).toBe("visits")
-    expect(parseReportsQuery(new URLSearchParams("tab=goods"), mockVisitReferenceData, now).tab).toBe("goods")
-    expect(parseReportsQuery(new URLSearchParams("tab=vehicle&comparison=previous"), mockVisitReferenceData, now)).toMatchObject({ tab: "vehicle", comparison: "previous" })
+    expect(parseReportsQuery(new URLSearchParams(""), visitReferenceDataFixture, now).tab).toBe("visits")
+    expect(parseReportsQuery(new URLSearchParams("tab=goods"), visitReferenceDataFixture, now).tab).toBe("goods")
+    expect(parseReportsQuery(new URLSearchParams("tab=vehicle&comparison=previous"), visitReferenceDataFixture, now)).toMatchObject({ tab: "vehicle", comparison: "previous" })
   })
 })
 
@@ -174,12 +174,12 @@ describe("records report scope filters", () => {
   it("defaults independently from an analysis scope stored in the same URL", () => {
     const params = new URLSearchParams("from=2026-08-01&to=2026-08-05&company=bplas&facility=bplas-merkez&comparison=previous")
 
-    expect(parseReportsQuery(params, mockVisitReferenceData, now).filters).toMatchObject({ startDate: "2026-08-01", endDate: "2026-08-05", companyId: "bplas", facilityId: "bplas-merkez" })
-    expect(parseRecordsReportFilters(params, mockVisitReferenceData, now)).toEqual({ startDate: "2026-07-19", endDate: "2026-08-17", companyId: "all", facilityId: "all" })
+    expect(parseReportsQuery(params, visitReferenceDataFixture, now).filters).toMatchObject({ startDate: "2026-08-01", endDate: "2026-08-05", companyId: "bplas", facilityId: "bplas-merkez" })
+    expect(parseRecordsReportFilters(params, visitReferenceDataFixture, now)).toEqual({ startDate: "2026-07-19", endDate: "2026-08-17", companyId: "all", facilityId: "all" })
   })
 
   it("validates its own prefixed URL values without reading analysis filters", () => {
-    const filters = parseRecordsReportFilters(new URLSearchParams("from=2026-08-01&recordsFrom=2026-08-03&recordsTo=2099-01-01&recordsCompany=bplas&recordsFacility=bplas-merkez"), mockVisitReferenceData, now)
+    const filters = parseRecordsReportFilters(new URLSearchParams("from=2026-08-01&recordsFrom=2026-08-03&recordsTo=2099-01-01&recordsCompany=bplas&recordsFacility=bplas-merkez"), visitReferenceDataFixture, now)
 
     expect(filters).toEqual({ startDate: "2026-08-03", endDate: "2026-08-17", companyId: "bplas", facilityId: "bplas-merkez" })
   })

@@ -29,8 +29,8 @@ function mapSessionUser(dto: SessionUserDto): SessionUser {
 
 /**
  * Real session adapter over `POST /api/auth/login`, `GET /api/auth/session`, and
- * `POST /api/auth/logout`. It keeps its own in-memory listener set (the mock's `subscribe`
- * contract) and registers a process-wide 401 handler so an expired/revoked cookie surfaced by
+ * `POST /api/auth/logout`. It keeps its own in-memory listener set for the `subscribe`
+ * contract and registers a process-wide 401 handler so an expired/revoked cookie surfaced by
  * any request drops every subscriber to the logged-out state.
  */
 export class HttpSessionService implements SessionService {

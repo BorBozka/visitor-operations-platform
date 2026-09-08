@@ -58,15 +58,4 @@ export interface ResourceAssignmentService {
     desired: DesiredResourceState,
   ): Promise<ResourceAssignmentView[]>
 
-  /**
-   * Validates that the meeting's existing ROOM and POOLED_EQUIPMENT assignments
-   * remain conflict-free and within capacity when plannedEnd is moved to
-   * newPlannedEnd.
-   *
-   * The meeting's current assignments are evaluated as if plannedEnd were
-   * newPlannedEnd against all OTHER non-cancelled, non-closed meetings.
-   * Throws a descriptive error on the first violation found.
-   * Resolves normally when the extension is safe.
-   */
-  validateExtension(meetingId: string, newPlannedEnd: string): Promise<void>
 }

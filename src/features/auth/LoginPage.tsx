@@ -3,19 +3,11 @@ import { FormEvent, useState } from "react"
 import { Navigate } from "react-router-dom"
 
 import bplasLogo from "@/assets/bplas-logo.svg"
-import { appMode } from "@/config/app-mode"
 import { getRoleHomeRoute } from "@/features/auth/auth-routes"
 import { useAuth } from "@/features/auth/auth-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-
-const demoAccounts = [
-  { label: "Çalışan", username: "calisan", password: "calisan" },
-  { label: "Yönetici", username: "yonetici", password: "yonetici" },
-  { label: "Admin", username: "admin", password: "admin" },
-  { label: "Güvenlik", username: "guvenlik", password: "guvenlik" },
-] as const
 
 export function LoginPage() {
   const { currentUser, initializing, loading, login } = useAuth()
@@ -50,7 +42,6 @@ export function LoginPage() {
         {error && <p role="alert" className="text-xs font-medium text-red-600">{error}</p>}
         <Button type="submit" className="w-full" disabled={loading}>{loading ? "Giriş yapılıyor…" : <><LogIn />Giriş Yap</>}</Button>
       </form>
-      {(import.meta.env.DEV || appMode === "demo") && <div className="mt-6 border-t border-slate-100 pt-4"><p className="mb-2 text-center text-[11px] font-medium text-slate-500">Demo hesapları</p><div className="grid grid-cols-2 gap-1.5">{demoAccounts.map((account) => <Button key={account.username} type="button" variant="outline" size="sm" className="text-xs" disabled={loading} onClick={() => { setUsername(account.username); setPassword(account.password); setError("") }}>{account.label}</Button>)}</div></div>}
     </section>
   </main>
 }

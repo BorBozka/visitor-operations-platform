@@ -31,8 +31,8 @@ export function getIsoWallClockTime(value: Date | string): IsoWallClockTime | nu
   return getIstanbulWallClockTime(value)
 }
 
-// Use this for a timestamp that represents an absolute instant (including UTC-normalized mock
-// seeds). Unlike getIsoWallClockTime it never reads ISO digits literally.
+// Use this for a timestamp that represents an absolute instant (including UTC-normalized test
+// fixtures). Unlike getIsoWallClockTime it never reads ISO digits literally.
 export function getIstanbulWallClockTime(value: Date | string): IsoWallClockTime | null {
   const instant = typeof value === "string" ? new Date(value) : value
   if (Number.isNaN(instant.getTime())) return null

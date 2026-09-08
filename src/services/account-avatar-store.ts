@@ -2,8 +2,8 @@
  * Client-side profile-photo preference.
  *
  * Phase 5 keeps avatars as a per-browser convenience in `localStorage` rather than inventing
- * blob/database infrastructure. Both the mock and the HTTP `AccountService` share this store;
- * only password changes go to the backend.
+ * blob/database infrastructure. The HTTP `AccountService` uses this browser-local store for
+ * avatars; only password changes go to the backend.
  */
 const avatarStoragePrefix = "visitor-management:account-avatar:"
 export const avatarChangedEvent = "visitor-management:account-avatar-changed"

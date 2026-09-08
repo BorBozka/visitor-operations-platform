@@ -4,19 +4,13 @@
 atama ve yönetici raporlamasını ortak bir çalışma alanında birleştiren rol tabanlı web
 uygulaması.
 
-[Portfolio / frontend demo](https://visitor-operations-platform.vercel.app)
-
-> Bu bağlantı yalnız frontend preview'dır. Projenin public backend/MSSQL production deployment'ı
-> değildir; gerçek veri akışı için ayrı Fastify API ve SQL Server gerekir.
-
 ![Admin dashboard; aktif ziyaretler, durum dağılımı ve günlük operasyon görünümü](visitor-operations-dashboard.jpg)
 
 ## Güncel durum
 
-Frontend runtime composition açıkça `VITE_APP_MODE` ile seçilir. Varsayılan `api` modu
-Fastify/Prisma/MSSQL backend'ine HTTP adaptörleri üzerinden bağlıdır; backend erişilemezse mock
-servislere sessiz fallback yapmaz. `demo` modu yalnız frontend içinde çalışan portfolio
-preview'ıdır. Backend LOCAL kimlik doğrulama, server-side rol/kapsam
+Frontend yalnız Fastify/Prisma/MSSQL backend'ine HTTP adaptörleri üzerinden bağlanır; backend
+erişilemezse in-memory servislere sessiz fallback yapmaz. Backend LOCAL kimlik doğrulama,
+server-side rol/kapsam
 yetkilendirmesi, hashed opaque session ve invitation tokenları ile environment tabanlı log/SMTP
 e-posta teslim sınırını içerir. Active Directory entegrasyonu uygulama kapsamında değildir.
 
@@ -101,14 +95,14 @@ Gereksinimler: desteklenen bir Node.js sürümü, pnpm ve erişilebilir Microsof
 
 3. **Environment dosyalarını hazırlayın.** Kök `.env.example` dosyasını `.env.local`,
    `server/.env.example` dosyasını `server/.env` olarak kopyalayın. `server/.env` içindeki
-   `DATABASE_URL` değerini kendi SQL Server bağlantınıza göre ayarlayın. Demo seed çalıştırmak
+   `DATABASE_URL` değerini kendi SQL Server bağlantınıza göre ayarlayın. Development/test seed çalıştırmak
    için yalnız yerel ortamda `NODE_ENV=development` ve `DEMO_SEED_ENABLED=true` kullanın.
 4. **Prisma Client ve development migration'larını uygulayın.** Development ortamında:
 
        pnpm db:generate
        pnpm db:migrate
 
-5. **Demo veriyi seed edin.** Yalnız bilerek etkinleştirilmiş development/test veritabanında:
+5. **Development/test verisini seed edin.** Yalnız bilerek etkinleştirilmiş development/test veritabanında:
 
        pnpm db:seed
 
@@ -126,10 +120,7 @@ Gereksinimler: desteklenen bir Node.js sürümü, pnpm ve erişilebilir Microsof
 
 ### Environment özeti
 
-- `VITE_APP_MODE=api`, gerçek Fastify/MSSQL uygulamasını kullanır ve varsayılandır.
-  `VITE_APP_MODE=demo`, frontend-only portfolio preview için mevcut mock servislerini kullanır.
-  Public Vercel deployment `demo` olarak yapılandırılır; başka bir değer açık configuration
-  hatası üretir.
+- Frontend runtime her zaman gerçek Fastify/MSSQL uygulamasını kullanır.
 - Kök `VITE_API_BASE_URL`, `/api` dahil backend taban adresidir. Tanımlanmazsa frontend
   `http://localhost:3001/api` kullanır.
 - `WEB_ORIGIN`, backend CORS ve public invitation URL üretimi için tek frontend origin'idir.
@@ -161,7 +152,7 @@ Production artifact'larını oluşturup derlenmiş backend'i çalıştırmak iç
 `server/dist/` altına derler; `pnpm start:api` bu çıktıyı Node.js ile çalıştırır. Frontend
 `dist/` dizini ayrıca statik bir web sunucusu/CDN üzerinden servis edilmelidir.
 
-Production seed önerilmez. Demo seed guard'ı `NODE_ENV=development` ve
+Production seed önerilmez. Development/test seed guard'ı `NODE_ENV=development` ve
 `DEMO_SEED_ENABLED=true` koşullarını birlikte ister; production verisine karşı etkinleştirmeyin.
 
 ## Production topology notu

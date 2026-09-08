@@ -16,7 +16,7 @@ import {
   VISITS_REPORT_COLUMNS,
 } from "@/features/reports/report-export"
 import { buildTransportAvailabilityInput } from "@/features/transport/transport-assignment-time"
-import { mockVisitReferenceData } from "@/services/mock-visit-data"
+import { visitReferenceDataFixture } from "@/test/fixtures/visit-reference-data"
 
 describe("VISITS_REPORT_COLUMNS", () => {
   it("defines the export-ready column set shared by the table and every export format", () => {
@@ -309,10 +309,10 @@ function baseVisit(overrides: {
   actualCheckIn?: string
   actualCheckOut?: string
 }): Visit {
-  const company = mockVisitReferenceData.companies.find((item) => item.id === "bplas")!
-  const facility = mockVisitReferenceData.facilities.find((item) => item.id === "bplas-merkez")!
-  const employee = mockVisitReferenceData.employees.find((item) => item.id === "maya-kara")!
-  const type = mockVisitReferenceData.visitTypes.find((item) => item.id === "meeting")!
+  const company = visitReferenceDataFixture.companies.find((item) => item.id === "bplas")!
+  const facility = visitReferenceDataFixture.facilities.find((item) => item.id === "bplas-merkez")!
+  const employee = visitReferenceDataFixture.employees.find((item) => item.id === "maya-kara")!
+  const type = visitReferenceDataFixture.visitTypes.find((item) => item.id === "meeting")!
   return {
     id: "v-1",
     meetingId: "meeting-1",

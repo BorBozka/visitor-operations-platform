@@ -11,7 +11,7 @@ export interface SessionUser {
   /**
    * Raw assigned scope from the backend session. The server is the authorization source of
    * truth; the frontend uses this only for scope-aware UI defaults, never as a security check.
-   * Optional so the in-memory mock session (tests/dev fixtures) need not populate it.
+   * Optional for compatibility with session responses that do not carry an assigned scope.
    */
   authorizationScope?: AuthorizationScope
   /** Linked employee id, or `null` for a pure Admin account. */

@@ -1,4 +1,3 @@
-import { appMode } from "@/config/app-mode"
 import { createRuntimeServices } from "@/services/runtime-services"
 import type { AccountService } from "@/services/account-service"
 import type { AdminService } from "@/services/admin-service"
@@ -12,12 +11,11 @@ import type { TransportAssignmentService } from "@/services/transport-assignment
 import type { VisitService } from "@/services/visit-service"
 
 /**
- * Runtime service wiring is selected explicitly at build time. API mode remains the default and
- * never falls back when the backend is unavailable. Demo mode is a frontend-only portfolio
- * composition using the existing deterministic mock services.
+ * The application has one runtime composition: typed HTTP adapters backed by Fastify/Prisma/MSSQL.
+ * Backend failures are surfaced through the HTTP client and never select an in-memory fallback.
  */
 
-const runtimeServices = createRuntimeServices(appMode)
+const runtimeServices = createRuntimeServices()
 
 export const visitService: VisitService = runtimeServices.visitService
 export const resourceCatalogService: ResourceCatalogService = runtimeServices.resourceCatalogService

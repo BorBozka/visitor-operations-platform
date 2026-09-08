@@ -69,8 +69,8 @@ export function isAdminEmailTaken(users: AdminUser[], excludeId: string | null, 
 }
 
 // The following three guards protect against an Admin locking themselves (or everyone) out.
-// They're pure so both the mock service (hard enforcement) and the page (proactive UI feedback)
-// share one definition instead of two copies that could drift.
+// They're pure so the page can provide proactive UI feedback while the backend independently
+// enforces the same security invariants.
 export function isSelfDeactivationAttempt(actingUserId: string | null, target: Pick<AdminUser, "id" | "active">, nextActive: boolean): boolean {
   return actingUserId !== null && actingUserId === target.id && target.active && !nextActive
 }

@@ -32,7 +32,7 @@ import {
   VISITS_REPORT_PAGE_SIZE,
   VISITS_REPORT_STATUS_LABELS,
 } from "@/features/reports/visits-report-utils"
-import { mockVisitReferenceData } from "@/services/mock-visit-data"
+import { visitReferenceDataFixture } from "@/test/fixtures/visit-reference-data"
 
 const baseFilters: ReportsScopeFilters = { startDate: "", endDate: "", companyId: "all", facilityId: "all" }
 
@@ -365,10 +365,10 @@ function visit(id: string, plannedStart: string, overrides: {
   actualCheckIn?: string
   actualCheckOut?: string
 }): Visit {
-  const company = mockVisitReferenceData.companies.find((item) => item.id === overrides.companyId)!
-  const facility = mockVisitReferenceData.facilities.find((item) => item.id === overrides.facilityId)!
-  const employee = mockVisitReferenceData.employees.find((item) => item.id === overrides.employeeId)!
-  const type = mockVisitReferenceData.visitTypes.find((item) => item.id === "meeting")!
+  const company = visitReferenceDataFixture.companies.find((item) => item.id === overrides.companyId)!
+  const facility = visitReferenceDataFixture.facilities.find((item) => item.id === overrides.facilityId)!
+  const employee = visitReferenceDataFixture.employees.find((item) => item.id === overrides.employeeId)!
+  const type = visitReferenceDataFixture.visitTypes.find((item) => item.id === "meeting")!
   return {
     id,
     meetingId: `meeting-${id}`,

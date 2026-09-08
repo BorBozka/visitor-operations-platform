@@ -801,10 +801,10 @@ Avoid playful or decorative animation.
 
 Manager visit details use one centered, compact dialog for both Dashboard `Sıradaki Ziyaretler` and `All Visits`. The dialog body scrolls independently, retains the resource-assignment tabs and unsaved-draft close guard, and does not display Meeting lifecycle information or actions. Lifecycle management remains in the host-scoped My Visits floating notification panel.
 
-## 25. Mock-to-Real Transition
+## 25. Runtime Data Boundary
 
 UI code created during early phases is retained.
 
 Runtime data must be accessed through the existing frontend service interfaces and `Http*`
-adapters. The UI must not bypass those boundaries or add a silent mock fallback. Deterministic
-mock fixtures may remain for unit/component tests.
+adapters. The UI must not bypass those boundaries or add a silent in-memory fallback. Focused
+local fixtures, fakes, or stubs may remain for unit/component tests.

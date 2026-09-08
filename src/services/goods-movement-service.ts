@@ -12,8 +12,8 @@ export interface GoodsMovementService {
   /** Manager/Admin planning list: every goods movement in the caller's authorization scope. */
   listGoodsMovements(): Promise<GoodsMovement[]>
   /**
-   * Security desk list: today's PLANNED movements inside the Security user's scope. Backed by a
-   * distinct scoped endpoint; the mock returns the same data set and the page filters it.
+   * Security desk list: today's PLANNED movements inside the Security user's scope, backed by a
+   * distinct scoped endpoint.
    */
   listSecurityGoodsMovements(): Promise<GoodsMovement[]>
   createGoodsMovement(input: GoodsMovementInput): Promise<GoodsMovement>

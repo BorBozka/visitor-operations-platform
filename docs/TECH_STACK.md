@@ -13,8 +13,8 @@
 
 The frontend is a production-oriented single-page application. Runtime domain access goes
 through `Http*` service adapters and the shared HTTP client; there is no runtime mock fallback.
-Mock-named services and deterministic data that remain under `src/` are test fixtures and legacy
-unit-test collaborators, not the application runtime composition.
+Unit/component tests use focused local fixtures, fakes, or stubs rather than an alternate
+application runtime composition.
 
 ## Backend
 

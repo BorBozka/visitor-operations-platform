@@ -6,7 +6,7 @@ export interface SaveAdminUserOptions {
   // session and re-enforces these rules; the HTTP adapter never sends this field.
   actingUserId?: string
   // Temporary password for a brand-new LOCAL user. The HTTP adapter forwards it to
-  // `POST /api/admin/users` so the backend can hash it; the mock ignores it. Not used on update
+  // `POST /api/admin/users` so the backend can hash it. Not used on update
   // (an existing user's password is changed only through `resetLocalUserPassword`).
   temporaryPassword?: string
 }
@@ -14,8 +14,7 @@ export interface SaveAdminUserOptions {
 export interface AdminService {
   getUsers(): Promise<AdminUser[]>
   saveUser(user: Omit<AdminUser, "id"> & { id?: string }, options?: SaveAdminUserOptions): Promise<AdminUser>
-  // Never returns or stores the password — a real backend would forward it to an
-  // auth/hash service instead. Rejects for Active Directory-owned users.
+  // Never returns or stores the password in the frontend. Rejects for Active Directory-owned users.
   resetLocalUserPassword(userId: string, newPassword: string): Promise<void>
   getOrganization(): Promise<OrganizationSnapshot>
   saveOrganizationEntity(kind: OrganizationKind, entity: Omit<OrganizationEntity, "id"> & { id?: string }): Promise<OrganizationEntity>

@@ -37,12 +37,13 @@ describe("authentication routes", () => {
     expect(guardSource).toContain("getRoleHomeRoute(currentUser.role)")
   })
 
-  it("keeps required validation, password visibility, and DEV-only quick-fill on login", () => {
+  it("keeps required validation and password visibility without embedded accounts", () => {
     expect(loginSource).toContain('"Kullanıcı adı ve şifre zorunludur."')
     expect(loginSource).toContain('"Kullanıcı adı veya şifre hatalı."')
     expect(loginSource).toContain('type={showPassword ? "text" : "password"}')
-    expect(loginSource).toContain("import.meta.env.DEV")
-    expect(loginSource).toContain("Demo hesapları")
+    expect(loginSource).not.toContain("import.meta.env.DEV")
+    expect(loginSource).not.toContain("Demo hesapları")
+    expect(loginSource).not.toContain("demoAccounts")
   })
 
   it("uses the current authentication session for account-menu logout", () => {

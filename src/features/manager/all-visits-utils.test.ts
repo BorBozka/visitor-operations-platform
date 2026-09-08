@@ -17,7 +17,7 @@ import {
   type VisitSort,
   type VisitSortField,
 } from "@/features/manager/all-visits-utils"
-import { mockVisitReferenceData } from "@/services/mock-visit-data"
+import { visitReferenceDataFixture } from "@/test/fixtures/visit-reference-data"
 
 const baseFilters: AllVisitsFilters = {
   search: "",
@@ -53,8 +53,8 @@ describe("all visits operations", () => {
   })
 
   it("keeps facilities within the selected company", () => {
-    expect(getFacilitiesForCompany(mockVisitReferenceData, "bplas").map((facility) => facility.id)).toEqual(["bplas-merkez", "bplas-arge"])
-    expect(parseAllVisitsQuery(new URLSearchParams("company=bplas&facility=otomotiv-uretim"), mockVisitReferenceData).filters.facilityId).toBe("all")
+    expect(getFacilitiesForCompany(visitReferenceDataFixture, "bplas").map((facility) => facility.id)).toEqual(["bplas-merkez", "bplas-arge"])
+    expect(parseAllVisitsQuery(new URLSearchParams("company=bplas&facility=otomotiv-uretim"), visitReferenceDataFixture).filters.facilityId).toBe("all")
   })
 
   it("filters status, visit type and additional requirement independently", () => {
@@ -133,14 +133,14 @@ describe("all visits operations", () => {
   })
 
   it("supports legacy dashboard date/status params and ignores invalid values", () => {
-    const legacy = parseAllVisitsQuery(new URLSearchParams("date=2026-08-11&status=PLANNED"), mockVisitReferenceData)
+    const legacy = parseAllVisitsQuery(new URLSearchParams("date=2026-08-11&status=PLANNED"), visitReferenceDataFixture)
     expect(legacy.filters).toMatchObject({ startDate: "2026-08-11", endDate: "2026-08-11", status: "PLANNED" })
 
-    const invalid = parseAllVisitsQuery(new URLSearchParams("date=bad&status=UNKNOWN&company=missing&page=-4"), mockVisitReferenceData)
+    const invalid = parseAllVisitsQuery(new URLSearchParams("date=bad&status=UNKNOWN&company=missing&page=-4"), visitReferenceDataFixture)
     expect(invalid.filters).toMatchObject({ startDate: "", endDate: "", status: "all", companyId: "all" })
     expect(invalid.page).toBe(1)
 
-    const staleInvitation = parseAllVisitsQuery(new URLSearchParams("invitation=FAILED"), mockVisitReferenceData)
+    const staleInvitation = parseAllVisitsQuery(new URLSearchParams("invitation=FAILED"), visitReferenceDataFixture)
     expect(staleInvitation.filters).not.toHaveProperty("invitationStatus")
   })
 })
@@ -160,11 +160,11 @@ function visit(id: string, plannedStart: string, overrides: {
   hasAdditionalRequirements?: boolean
   visitorCompany?: string
 }): Visit {
-  const company = mockVisitReferenceData.companies.find((item) => item.id === overrides.companyId)!
-  const facility = mockVisitReferenceData.facilities.find((item) => item.id === overrides.facilityId)!
-  const employee = mockVisitReferenceData.employees.find((item) => item.id === overrides.employeeId)!
+  const company = visitReferenceDataFixture.companies.find((item) => item.id === overrides.companyId)!
+  const facility = visitReferenceDataFixture.facilities.find((item) => item.id === overrides.facilityId)!
+  const employee = visitReferenceDataFixture.employees.find((item) => item.id === overrides.employeeId)!
   const typeId = overrides.typeId ?? "meeting"
-  const type = mockVisitReferenceData.visitTypes.find((item) => item.id === typeId)!
+  const type = visitReferenceDataFixture.visitTypes.find((item) => item.id === typeId)!
   return {
     id,
     meetingId: `meeting-${id}`,

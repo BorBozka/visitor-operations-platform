@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
+import type { OrganizationSnapshot } from "@/domain/organization"
 import { OrganizationHierarchy, OrganizationWorkspace } from "@/features/admin/OrganizationPage"
 import {
   companyNodeKey,
@@ -25,9 +26,26 @@ import {
   isOrganizationDraftDirty,
   type OrganizationWorkspaceMode,
 } from "@/features/admin/organization-workspace"
-import { initialMockOrganizationSnapshot } from "@/services/mock-organization-store"
-
-const organization = structuredClone(initialMockOrganizationSnapshot)
+const organization: OrganizationSnapshot = {
+  companies: [
+    { id: "bplas", name: "BPLAS A.Ş.", active: true },
+    { id: "bplas-otomotiv", name: "BPLAS Otomotiv A.Ş.", active: true },
+    { id: "anadolu-lojistik", name: "Anadolu Lojistik A.Ş.", active: true },
+  ],
+  facilities: [
+    { id: "bplas-merkez", parentId: "bplas", name: "Merkez Tesis", active: true },
+    { id: "bplas-arge", parentId: "bplas", name: "Ar-Ge Merkezi", active: true },
+    { id: "otomotiv-uretim", parentId: "bplas-otomotiv", name: "Üretim Tesisi", active: true },
+  ],
+  departments: [
+    { id: "department-bplas-satin-alma", parentId: "bplas", name: "Satın Alma", active: true },
+  ],
+  securityGates: [
+    { id: "gate-bplas-merkez-ana-giris", parentId: "bplas-merkez", name: "Ana Giriş", active: true },
+    { id: "gate-bplas-merkez-lojistik", parentId: "bplas-merkez", name: "Lojistik Kapısı", active: true },
+    { id: "gate-bplas-arge-eski-giris", parentId: "bplas-arge", name: "Eski Giriş", active: false },
+  ],
+}
 const noop = () => undefined
 const saveNoop = async () => undefined
 const pageSource = readFileSync(resolve(process.cwd(), "src/features/admin/OrganizationPage.tsx"), "utf8")

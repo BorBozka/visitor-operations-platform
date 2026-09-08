@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test"
 
 /**
  * Browser E2E against the real stack: Vite dev server + Fastify backend + local MSSQL with the
- * controlled two-company demo seed. Sessions are real HttpOnly cookies. Run with:
+ * controlled two-company integration seed. Sessions are real HttpOnly cookies. Run with:
  *
  *   pnpm db:migrate && pnpm db:seed         # once, controlled seed
  *   pnpm e2e                                # starts both servers and runs the suite

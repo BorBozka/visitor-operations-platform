@@ -7,16 +7,17 @@ import {
   paginateTransportAssignments,
   TRANSPORT_PAGE_SIZE,
 } from "@/features/transport/transport-assignment-pagination"
-import { initialMockTransportAssignments } from "@/services/mock-transport-assignment-data"
+
+const assignments = Array.from({ length: 153 }, (_, index) => ({ id: `assignment-${index}` })) as PlannedTransportAssignment[]
 
 describe("planned transport assignment pagination", () => {
   it("shows five assignments per page", () => {
     expect(TRANSPORT_PAGE_SIZE).toBe(5)
-    expect(initialMockTransportAssignments).toHaveLength(153)
-    expect(paginateTransportAssignments(initialMockTransportAssignments, 1)).toHaveLength(5)
-    expect(paginateTransportAssignments(initialMockTransportAssignments, 2)).toHaveLength(5)
-    expect(paginateTransportAssignments(initialMockTransportAssignments, 31)).toHaveLength(3)
-    expect(getTransportPageCount(initialMockTransportAssignments.length)).toBe(31)
+    expect(assignments).toHaveLength(153)
+    expect(paginateTransportAssignments(assignments, 1)).toHaveLength(5)
+    expect(paginateTransportAssignments(assignments, 2)).toHaveLength(5)
+    expect(paginateTransportAssignments(assignments, 31)).toHaveLength(3)
+    expect(getTransportPageCount(assignments.length)).toBe(31)
   })
 
   it("returns only real page-number controls", () => {

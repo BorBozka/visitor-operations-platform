@@ -56,13 +56,4 @@ export class HttpResourceAssignmentService implements ResourceAssignmentService 
       desired,
     )
   }
-
-  /**
-   * No-op on the HTTP path: `POST /api/meetings/:id/extend` re-validates the meeting's
-   * assignments for the new range inside its own SERIALIZABLE transaction, so the frontend
-   * never pre-validates an extension. Kept only to satisfy the shared interface the mock uses.
-   */
-  async validateExtension(): Promise<void> {
-    // intentionally empty — see doc comment
-  }
 }
