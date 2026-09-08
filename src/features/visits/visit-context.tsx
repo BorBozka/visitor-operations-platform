@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import type { Meeting, MeetingInput, MeetingWithVisits, RescheduleVisitInput, Visit, VisitReferenceData } from "@/domain/visits"
 import { useAuth } from "@/features/auth/auth-context"
+import { getSessionKey } from "@/features/auth/session-identity"
+import { createVisitLoader, INITIAL_VISIT_STATE, type VisitState } from "@/features/visits/visit-loader"
 import type { VisitService } from "@/services"
 
 interface VisitContextValue {
@@ -24,123 +26,88 @@ const VisitContext = createContext<VisitContextValue | null>(null)
 
 export function VisitProvider({ service, children }: { service: VisitService; children: React.ReactNode }) {
   const { currentUser } = useAuth()
-  const currentUserId = currentUser?.id ?? null
-  const [meetings, setMeetings] = useState<Meeting[]>([])
-  const [visits, setVisits] = useState<Visit[]>([])
-  const [referenceData, setReferenceData] = useState<VisitReferenceData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const sessionKey = getSessionKey(currentUser)
+  const signedIn = sessionKey !== null
+  const [state, setState] = useState<VisitState>(INITIAL_VISIT_STATE)
+  // One loader per provider instance: its session guard must outlive individual loads so a late
+  // response from a previous session is still recognised as stale.
+  const [loader] = useState(() =>
+    createVisitLoader(service, (patch) => setState((previous) => ({ ...previous, ...patch }))),
+  )
 
-  const load = useCallback(async () => {
-    // Identity is resolved server-side for the signed-in user.
-    // Skip while signed out and re-run when the user changes so stale data never leaks across logins.
-    if (!currentUserId) {
-      setMeetings([])
-      setVisits([])
-      setReferenceData(null)
-      setError(null)
-      setIsLoading(false)
-      return
-    }
-    setIsLoading(true)
-    setError(null)
-    try {
-      const [nextMeetings, nextVisits, nextReferenceData] = await Promise.all([
-        service.listMeetings(),
-        service.listVisits(),
-        service.getReferenceData(),
-      ])
-      setMeetings(nextMeetings)
-      setVisits(nextVisits)
-      setReferenceData(nextReferenceData)
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Ziyaretler yüklenemedi.")
-    } finally {
-      setIsLoading(false)
-    }
-  }, [service, currentUserId])
+  // Keyed on the session so a logout clears immediately and an account switch reloads for the
+  // account that is signed in now.
+  useEffect(() => { void loader.applySession(signedIn) }, [loader, signedIn, sessionKey])
 
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const refreshData = useCallback(async () => {
-    const [nextMeetings, nextVisits] = await Promise.all([service.listMeetings(), service.listVisits()])
-    setMeetings(nextMeetings)
-    setVisits(nextVisits)
-  }, [service])
+  const reload = useCallback(() => loader.reload(signedIn), [loader, signedIn])
 
   const createMeeting = useCallback(
     async (input: MeetingInput) => {
       const created = await service.createMeeting(input)
-      await refreshData()
+      await loader.refresh()
       return created
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const updateMeeting = useCallback(
     async (id: string, input: MeetingInput) => {
       const updated = await service.updateMeeting(id, input)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const sendMeetingInvitations = useCallback(
     async (id: string) => {
       const updated = await service.sendMeetingInvitations(id)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const sendVisitInvitation = useCallback(
     async (id: string) => {
       const updated = await service.sendVisitInvitation(id)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const rescheduleVisit = useCallback(
     async (id: string, input: RescheduleVisitInput) => {
       const updated = await service.rescheduleVisit(id, input)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const cancelVisit = useCallback(
     async (id: string) => {
       const updated = await service.cancelVisit(id)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const cancelMeeting = useCallback(
     async (id: string) => {
       const updated = await service.cancelMeeting(id)
-      await refreshData()
+      await loader.refresh()
       return updated
     },
-    [refreshData, service],
+    [loader, service],
   )
 
   const value = useMemo(
     () => ({
-      meetings,
-      visits,
-      referenceData,
-      isLoading,
-      error,
-      reload: load,
+      ...state,
+      reload,
       createMeeting,
       updateMeeting,
       sendMeetingInvitations,
@@ -149,7 +116,7 @@ export function VisitProvider({ service, children }: { service: VisitService; ch
       cancelVisit,
       cancelMeeting,
     }),
-    [meetings, visits, referenceData, isLoading, error, load, createMeeting, updateMeeting, sendMeetingInvitations, sendVisitInvitation, rescheduleVisit, cancelVisit, cancelMeeting],
+    [state, reload, createMeeting, updateMeeting, sendMeetingInvitations, sendVisitInvitation, rescheduleVisit, cancelVisit, cancelMeeting],
   )
 
   return <VisitContext.Provider value={value}>{children}</VisitContext.Provider>

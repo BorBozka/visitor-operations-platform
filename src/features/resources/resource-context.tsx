@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 
 import type { FacilityResource, ResourceInput } from "@/domain/resources"
+import { useAuth } from "@/features/auth/auth-context"
+import { getSessionKey } from "@/features/auth/session-identity"
+import { canLoadResources, createResourceLoader, INITIAL_RESOURCE_STATE, type ResourceState } from "@/features/resources/resource-loader"
 import type { ResourceCatalogService } from "@/services"
 
 interface ResourceContextValue {
@@ -17,63 +20,53 @@ interface ResourceContextValue {
 const ResourceContext = createContext<ResourceContextValue | null>(null)
 
 export function ResourceProvider({ service, children }: { service: ResourceCatalogService; children: React.ReactNode }) {
-  const [resources, setResources] = useState<FacilityResource[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { currentUser } = useAuth()
+  const sessionKey = getSessionKey(currentUser)
+  const allowed = canLoadResources(currentUser)
+  const [state, setState] = useState<ResourceState>(INITIAL_RESOURCE_STATE)
+  // One loader per provider instance: its session guard must outlive individual loads so a late
+  // response from a previous session is still recognised as stale.
+  const [loader] = useState(() =>
+    createResourceLoader(service, (patch) => setState((previous) => ({ ...previous, ...patch }))),
+  )
 
-  const load = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      setResources(await service.listResources())
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Kaynaklar yüklenemedi.")
-    } finally {
-      setIsLoading(false)
-    }
-  }, [service])
+  // Keyed on the session as well as the permission: switching between two Managers stays allowed
+  // but must still drop the previous account's resources and reload.
+  useEffect(() => { void loader.applySession(allowed) }, [loader, allowed, sessionKey])
 
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const refreshResources = useCallback(async () => {
-    setResources(await service.listResources())
-  }, [service])
+  const reload = useCallback(() => loader.reload(allowed), [loader, allowed])
 
   const createResource = useCallback(async (input: ResourceInput) => {
     const created = await service.createResource(input)
-    await refreshResources()
+    await loader.refresh()
     return created
-  }, [refreshResources, service])
+  }, [loader, service])
 
   const updateResource = useCallback(async (id: string, input: ResourceInput) => {
     const updated = await service.updateResource(id, input)
-    await refreshResources()
+    await loader.refresh()
     return updated
-  }, [refreshResources, service])
+  }, [loader, service])
 
   const setResourceActive = useCallback(async (id: string, isActive: boolean) => {
     const updated = await service.setResourceActive(id, isActive)
-    await refreshResources()
+    await loader.refresh()
     return updated
-  }, [refreshResources, service])
+  }, [loader, service])
 
   const deleteResource = useCallback(async (id: string) => {
     await service.deleteResource(id)
-    await refreshResources()
-  }, [refreshResources, service])
+    await loader.refresh()
+  }, [loader, service])
 
   const value = useMemo(() => ({
-    resources,
-    isLoading,
-    error,
-    reload: load,
+    ...state,
+    reload,
     createResource,
     updateResource,
     setResourceActive,
     deleteResource,
-  }), [resources, isLoading, error, load, createResource, updateResource, setResourceActive, deleteResource])
+  }), [state, reload, createResource, updateResource, setResourceActive, deleteResource])
 
   return <ResourceContext.Provider value={value}>{children}</ResourceContext.Provider>
 }

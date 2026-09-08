@@ -298,7 +298,7 @@ describe("Organization inline create and edit forms", () => {
 
   it("routes successful saves through the service-backed Admin context and returns to view", () => {
     expect(contextSource).toContain("service.saveOrganizationEntity(kind, entity)")
-    expect(contextSource).toContain("setOrganization(await service.getOrganization())")
+    expect(contextSource).toContain("loader.commitIfCurrent(() => service.getOrganization()")
     expect(pageSource).toContain("setWorkspaceMode(viewOrganizationWorkspace())")
   })
 

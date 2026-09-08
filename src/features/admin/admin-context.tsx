@@ -2,6 +2,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 
 import { DEFAULT_OVERDUE_TOLERANCE_MINUTES, type AdminUser, type OperationalSettings, type OrganizationEntity, type OrganizationKind, type OrganizationSnapshot, type VisitTypeDefinition, type VisitorCardInventoryItem, type VisitorRuleVersion } from "@/domain/admin"
+import { createAdminLoader, EMPTY_ADMIN_DATA, getAdminDataScope } from "@/features/admin/admin-loader"
+import { useAuth } from "@/features/auth/auth-context"
+import { getSessionKey } from "@/features/auth/session-identity"
 import type { AdminService } from "@/services/admin-service"
 
 interface AdminContextValue {
@@ -20,37 +23,35 @@ interface AdminContextValue {
 const AdminContext = createContext<AdminContextValue | null>(null)
 
 export function AdminProvider({ service, children }: { service: AdminService; children: ReactNode }) {
-  const [users, setUsers] = useState<AdminUser[]>([])
-  const [organization, setOrganization] = useState<OrganizationSnapshot | null>(null)
-  const [visitTypes, setVisitTypes] = useState<VisitTypeDefinition[]>([])
-  const [visitorCards, setVisitorCards] = useState<VisitorCardInventoryItem[]>([])
-  const [visitorRules, setVisitorRules] = useState<VisitorRuleVersion[]>([])
-  const [settings, setSettings] = useState<OperationalSettings | null>(null)
+  const { currentUser } = useAuth()
+  const sessionKey = getSessionKey(currentUser)
+  const scope = getAdminDataScope(currentUser)
+  const [data, setData] = useState(EMPTY_ADMIN_DATA)
+  // One loader per provider instance: its session guard must outlive individual loads so a late
+  // response from a previous session is still recognised as stale.
+  const [loader] = useState(() => createAdminLoader(service, setData))
 
-  const reload = useCallback(async () => {
-    const [nextUsers, nextOrganization, nextVisitTypes, nextCards, nextRules, nextSettings] = await Promise.all([
-      service.getUsers(), service.getOrganization(), service.getVisitTypes(), service.getVisitorCards(), service.getVisitorRuleVersions(), service.getOperationalSettings(),
-    ])
-    setUsers(nextUsers); setOrganization(nextOrganization); setVisitTypes(nextVisitTypes); setVisitorCards(nextCards); setVisitorRules(nextRules); setSettings(nextSettings)
-  }, [service])
+  // Keyed on the session as well as the scope: switching between two Managers keeps the same
+  // scope but must still drop the previous account's data and reload.
+  useEffect(() => { void loader.applySession(scope) }, [loader, scope, sessionKey])
 
-  useEffect(() => { void reload() }, [reload])
+  const reload = useCallback(() => loader.refresh(scope), [loader, scope])
   const saveOrganizationEntity = useCallback(async (kind: OrganizationKind, entity: Omit<OrganizationEntity, "id"> & { id?: string }) => {
     const saved = await service.saveOrganizationEntity(kind, entity)
-    setOrganization(await service.getOrganization())
+    await loader.commitIfCurrent(() => service.getOrganization(), (organization) => setData((previous) => ({ ...previous, organization })))
     return saved
-  }, [service])
+  }, [loader, service])
   const markVisitorCardLost = useCallback(async (id: string) => {
     const updated = await service.markVisitorCardLost(id)
-    setVisitorCards(await service.getVisitorCards())
+    await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
     return updated
-  }, [service])
+  }, [loader, service])
   const restoreVisitorCard = useCallback(async (id: string) => {
     const updated = await service.restoreVisitorCard(id)
-    setVisitorCards(await service.getVisitorCards())
+    await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
     return updated
-  }, [service])
-  const value = useMemo(() => ({ users, organization, visitTypes, visitorCards, visitorRules, settings, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard }), [users, organization, visitTypes, visitorCards, visitorRules, settings, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard])
+  }, [loader, service])
+  const value = useMemo(() => ({ ...data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard }), [data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard])
   return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>
 }
 
