@@ -130,6 +130,13 @@ Gereksinimler: desteklenen bir Node.js sürümü, pnpm ve erişilebilir Microsof
 - Development/test ortamında `EMAIL_DELIVERY_MODE=log` e-posta göndermez. Production'da
   `EMAIL_DELIVERY_MODE=smtp` zorunludur ve tüm SMTP alanları sağlanmadıkça server başlamaz.
 - `DEMO_SEED_ENABLED` production'da `false` kalmalıdır.
+- Kök `VITE_DEMO_LOGIN=true`, login ekranında dört demo rolünü (Admin, Yönetici, Çalışan,
+  Güvenlik) tek tıkla forma dolduran kompakt butonları gösterir. Butonlar yalnız kullanıcı adı ve
+  şifre alanlarını doldurur; giriş yine normal `Giriş Yap` ve LOCAL `/api/auth/login` akışıyla
+  yapılır. Flag tanımsız/`true` dışında bir değer olduğunda butonlar hiç render edilmez ve
+  production build'de varsayılan kapalıdır. İlgili hesaplar yalnız development seed'inde
+  (`NODE_ENV=development` + `DEMO_SEED_ENABLED=true`) oluşturulur; credential'lar
+  `server/prisma/seed-data.ts` ve `src/config/demo-login.ts` sözleşmesinde tutulur.
 
 ## Development ve production komutları
 

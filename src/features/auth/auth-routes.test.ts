@@ -45,9 +45,12 @@ describe("authentication routes", () => {
     expect(loginErrorSource).toContain('"Çok fazla giriş denemesi yapıldı. Lütfen kısa bir süre sonra tekrar deneyin."')
     expect(loginErrorSource).toContain('"Sunucu tarafında geçici bir hata oluştu. Lütfen tekrar deneyin."')
     expect(loginSource).toContain('type={showPassword ? "text" : "password"}')
+    // Demo shortcuts live behind the `VITE_DEMO_LOGIN` flag in `@/config/demo-login`, never
+    // behind the dev-server check and never as credentials embedded in this component.
     expect(loginSource).not.toContain("import.meta.env.DEV")
-    expect(loginSource).not.toContain("Demo hesapları")
-    expect(loginSource).not.toContain("demoAccounts")
+    expect(loginSource).toContain("isDemoLoginEnabled()")
+    expect(loginSource).toContain("demoLoginAccounts.map")
+    expect(loginSource).not.toContain('password: "')
   })
 
   it("uses the current authentication session for account-menu logout", () => {
