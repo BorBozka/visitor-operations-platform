@@ -7,6 +7,7 @@ import { getRoleHomeRoute } from "@/features/auth/auth-routes"
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
 const appSource = read("src/app/App.tsx")
 const loginSource = read("src/features/auth/LoginPage.tsx")
+const loginErrorSource = read("src/features/auth/login-error-messages.ts")
 const guardSource = read("src/features/auth/RoleGuard.tsx")
 const menuSource = read("src/components/account/AccountMenu.tsx")
 
@@ -39,7 +40,10 @@ describe("authentication routes", () => {
 
   it("keeps required validation and password visibility without embedded accounts", () => {
     expect(loginSource).toContain('"Kullanıcı adı ve şifre zorunludur."')
-    expect(loginSource).toContain('"Kullanıcı adı veya şifre hatalı."')
+    expect(loginErrorSource).toContain('"Kullanıcı adı veya şifre hatalı."')
+    expect(loginErrorSource).toContain('"Sunucuya ulaşılamıyor. Bağlantınızı kontrol edip tekrar deneyin."')
+    expect(loginErrorSource).toContain('"Çok fazla giriş denemesi yapıldı. Lütfen kısa bir süre sonra tekrar deneyin."')
+    expect(loginErrorSource).toContain('"Sunucu tarafında geçici bir hata oluştu. Lütfen tekrar deneyin."')
     expect(loginSource).toContain('type={showPassword ? "text" : "password"}')
     expect(loginSource).not.toContain("import.meta.env.DEV")
     expect(loginSource).not.toContain("Demo hesapları")

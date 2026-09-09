@@ -5,6 +5,7 @@ import { Navigate } from "react-router-dom"
 import bplasLogo from "@/assets/bplas-logo.svg"
 import { getRoleHomeRoute } from "@/features/auth/auth-routes"
 import { useAuth } from "@/features/auth/auth-context"
+import { classifyLoginError } from "@/features/auth/login-error-messages"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,8 +26,9 @@ export function LoginPage() {
     setError("")
     try {
       await login(username, password)
-    } catch {
-      setError("Kullanıcı adı veya şifre hatalı.")
+    } catch (error) {
+      const classified = classifyLoginError(error)
+      setError(classified.message)
     }
   }
 
