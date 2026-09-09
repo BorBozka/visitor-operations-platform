@@ -218,56 +218,9 @@ export function downloadReportCsv(headers: string[], rows: string[][], filename:
   triggerBrowserDownload(blob, filename)
 }
 
-// xlsx-js-style and jspdf are dynamically imported so viewing the Reports page never pulls their
-// ~700KB combined weight in — only clicking Excel/PDF export does.
-function spreadsheetColumnName(index: number) {
-  let value = index + 1
-  let name = ""
-  while (value > 0) {
-    const remainder = (value - 1) % 26
-    name = String.fromCharCode(65 + remainder) + name
-    value = Math.floor((value - 1) / 26)
-  }
-  return name
-}
-
-function getExcelColumnLimits(header: string) {
-  if (/^(Yön|Tarih|Durum|Süre|Referans No|Gecikme \(dk\)|Planlanan Giriş|Planlanan Çıkış|Gerçek Giriş|Gerçek Çıkış)$/u.test(header)) return { min: 12, max: 20 }
-  if (/Şirket|Karşı Taraf|İlişkili/u.test(header)) return { min: 18, max: 40 }
-  return { min: 16, max: 30 }
-}
-
-export function getReportExcelColumnWidths(headers: string[], rows: string[][]) {
-  return headers.map((header, index) => {
-    const longestValue = rows.reduce((longest, row) => Math.max(longest, row[index]?.length ?? 0), header.length)
-    const limits = getExcelColumnLimits(header)
-    return { wch: Math.min(limits.max, Math.max(limits.min, longestValue + 2)) }
-  })
-}
-
-export function formatReportWorksheet(worksheet: { [key: string]: unknown }, headers: string[], rows: string[][]) {
-  worksheet["!cols"] = getReportExcelColumnWidths(headers, rows)
-  worksheet["!autofilter"] = { ref: `A1:${spreadsheetColumnName(headers.length - 1)}${rows.length + 1}` }
-  worksheet["!rows"] = [{ hpt: 24 }, ...rows.map(() => ({ hpt: 20 }))]
-
-  headers.forEach((_, columnIndex) => {
-    const cell = worksheet[`${spreadsheetColumnName(columnIndex)}1`] as { s?: unknown } | undefined
-    if (!cell) return
-    cell.s = {
-      font: { bold: true, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "1E3A5F" } },
-      alignment: { horizontal: "center", vertical: "center", wrapText: true },
-    }
-  })
-}
-
 export async function downloadReportExcel(sheetName: string, headers: string[], rows: string[][], filename: string) {
-  const XLSX = await import("xlsx-js-style")
-  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  formatReportWorksheet(worksheet, headers, rows)
-  const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
-  XLSX.writeFile(workbook, filename)
+  const { downloadReportExcelFile } = await import("@/features/reports/report-excel-export")
+  await downloadReportExcelFile(sheetName, headers, rows, filename)
 }
 
 export async function downloadReportPdf(title: string, headers: string[], rows: string[][], filename: string) {

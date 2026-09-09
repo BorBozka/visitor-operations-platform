@@ -95,7 +95,7 @@ carries the Manager area's company/facility scope and refresh state separately.
 `src/features/reports/` is a tabbed page (`Ziyaretler` / `Araç-Şoför` / `Mal Hareketi`) sharing
 one filter bar (date range + company/facility, URL-persisted like All Visits), one
 `ReportKpiCard` component, and one CSV/Excel/PDF export layer (`report-export.ts` —
-`downloadReportCsv/Excel/Pdf`, each tab supplies its own `ReportColumn[]` + row builder). xlsx
+`downloadReportCsv/Excel/Pdf`, each tab supplies its own `ReportColumn[]` + row builder). The XLSX writer
 and jspdf/jspdf-autotable are dynamically imported only when an export button is clicked, so
 viewing the Reports page doesn't pull their weight into the initial bundle. Each tab has its own
 `*-report-utils.ts` for domain-specific filtering/KPI calculation — follow that split (shared

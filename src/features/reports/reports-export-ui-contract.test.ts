@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 
 const pageSource = readFileSync(resolve(process.cwd(), "src/features/reports/ReportsPage.tsx"), "utf8")
 const exportSource = readFileSync(resolve(process.cwd(), "src/features/reports/report-export.ts"), "utf8")
+const excelExportSource = readFileSync(resolve(process.cwd(), "src/features/reports/report-excel-export.ts"), "utf8")
 const visitsSource = readFileSync(resolve(process.cwd(), "src/features/reports/VisitsReportTab.tsx"), "utf8")
 const goodsSource = readFileSync(resolve(process.cwd(), "src/features/reports/GoodsReportTab.tsx"), "utf8")
 
@@ -44,8 +45,10 @@ describe("Reports export implementation contract", () => {
   })
 
   it("formats Excel and embeds a Unicode PDF font", () => {
-    expect(exportSource).toContain('worksheet["!cols"]')
-    expect(exportSource).toContain('worksheet["!autofilter"]')
+    expect(exportSource).toContain('await import("@/features/reports/report-excel-export")')
+    expect(excelExportSource).toContain("createReportAutoFilterFeature")
+    expect(excelExportSource).toContain("getReportExcelColumnWidths")
+    expect(excelExportSource).toContain('fontWeight: "bold"')
     expect(exportSource).toContain("registerReportPdfFont")
     expect(exportSource).toContain("REPORT_PDF_FONT.family")
   })

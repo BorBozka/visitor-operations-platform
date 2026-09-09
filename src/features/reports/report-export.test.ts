@@ -1,3 +1,5 @@
+import { inflateRawSync } from "node:zlib"
+
 import { describe, expect, it } from "vitest"
 
 import type { GoodsMovement } from "@/domain/goods-movements"
@@ -7,14 +9,18 @@ import {
   buildFleetReportRows,
   buildGoodsReportRows,
   buildVisitsReportRows,
-  formatReportWorksheet,
   FLEET_REPORT_COLUMNS,
-  getReportExcelColumnWidths,
   GOODS_REPORT_COLUMNS,
   REPORT_PNG_CAPTURE_OPTIONS,
   rowsToCsv,
   VISITS_REPORT_COLUMNS,
 } from "@/features/reports/report-export"
+import {
+  buildReportExcelSheet,
+  createReportAutoFilterFeature,
+  createReportExcelBlob,
+  getReportExcelColumnWidths,
+} from "@/features/reports/report-excel-export"
 import { buildTransportAvailabilityInput } from "@/features/transport/transport-assignment-time"
 import { visitReferenceDataFixture } from "@/test/fixtures/visit-reference-data"
 
@@ -186,6 +192,28 @@ describe("rowsToCsv", () => {
   })
 })
 
+// An .xlsx file is a ZIP of XML parts. Walking the local file headers keeps the assertions on the
+// real workbook Excel will open, so a silent regression in the XLSX writer cannot pass unnoticed.
+async function readXlsxParts(blob: Blob) {
+  const buffer = Buffer.from(await blob.arrayBuffer())
+  const parts: Record<string, string> = {}
+  let offset = 0
+
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const compressionMethod = buffer.readUInt16LE(offset + 8)
+    const compressedSize = buffer.readUInt32LE(offset + 18)
+    const nameLength = buffer.readUInt16LE(offset + 26)
+    const extraLength = buffer.readUInt16LE(offset + 28)
+    const name = buffer.subarray(offset + 30, offset + 30 + nameLength).toString("utf8")
+    const dataStart = offset + 30 + nameLength + extraLength
+    const data = buffer.subarray(dataStart, dataStart + compressedSize)
+    parts[name] = (compressionMethod === 0 ? data : inflateRawSync(data)).toString("utf8")
+    offset = dataStart + compressedSize
+  }
+
+  return parts
+}
+
 describe("Excel report formatting", () => {
   it("calculates capped readable widths from headers and complete export rows", () => {
     const widths = getReportExcelColumnWidths(["Durum", "Ziyaretçi Şirketi"], [["Planlandı", "Çok Uzun Bir Şirket Adı ve Açıklaması"]])
@@ -193,14 +221,52 @@ describe("Excel report formatting", () => {
     expect(widths).toEqual([{ wch: 12 }, { wch: 39 }])
   })
 
-  it("adds widths, autofilter, row heights and a styled header to the worksheet", () => {
-    const worksheet: Record<string, unknown> = { A1: {}, B1: {} }
-    formatReportWorksheet(worksheet, ["Durum", "Ziyaretçi"], [["Planlandı", "Ayşe Yılmaz"]])
+  it("preserves widths, row heights, styled headers and the autofilter range", () => {
+    const sheet = buildReportExcelSheet("Ziyaretler", ["Durum", "Ziyaretçi"], [["Planlandı", "Ayşe Yılmaz"]])
 
-    expect(worksheet["!cols"]).toEqual([{ wch: 12 }, { wch: 16 }])
-    expect(worksheet["!autofilter"]).toEqual({ ref: "A1:B2" })
-    expect(worksheet["!rows"]).toEqual([{ hpt: 24 }, { hpt: 20 }])
-    expect(worksheet.A1).toMatchObject({ s: { font: { bold: true }, alignment: { wrapText: true } } })
+    expect(sheet.options).toEqual({ sheet: "Ziyaretler", columns: [{ width: 12 }, { width: 16 }] })
+    expect(sheet.autoFilterRef).toBe("A1:B2")
+    expect(sheet.data[0][0]).toMatchObject({
+      value: "Durum",
+      height: 24,
+      fontWeight: "bold",
+      textColor: "#FFFFFF",
+      backgroundColor: "#1E3A5F",
+      align: "center",
+      alignVertical: "center",
+      wrap: true,
+    })
+    expect(sheet.data[1][0]).toMatchObject({ value: "Planlandı", height: 20 })
+  })
+
+  it("inserts the autofilter in the schema-defined worksheet position", () => {
+    const transform = createReportAutoFilterFeature("A1:B2").files?.transform?.["xl/worksheets/sheet{id}.xml"]?.transform
+    const xml = '<?xml version="1.0"?><worksheet><sheetData/><pageMargins/></worksheet>'
+
+    expect(transform?.(xml, {}, { sheetIndex: 0, sheetId: "1" })).toBe(
+      '<?xml version="1.0"?><worksheet><sheetData/><autoFilter ref="A1:B2"/><pageMargins/></worksheet>',
+    )
+  })
+
+  it("writes the report values, widths, heights, header style and autofilter into the workbook", async () => {
+    const blob = await createReportExcelBlob("Ziyaretler", ["Durum", "Ziyaretçi"], [["Planlandı", "Ayşe Yılmaz"]])
+    const parts = await readXlsxParts(blob)
+
+    expect(blob.type).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    expect(parts["xl/sharedStrings.xml"]).toContain("<si><t>Durum</t></si><si><t>Ziyaretçi</t></si>")
+    expect(parts["xl/sharedStrings.xml"]).toContain("<si><t>Planlandı</t></si><si><t>Ayşe Yılmaz</t></si>")
+
+    const sheet = parts["xl/worksheets/sheet1.xml"]
+    expect(sheet).toContain('<col min="1" max="1" width="12" customWidth="1"/>')
+    expect(sheet).toContain('<col min="2" max="2" width="16" customWidth="1"/>')
+    expect(sheet).toContain('<row r="1" ht="24" customHeight="1">')
+    expect(sheet).toContain('<row r="2" ht="20" customHeight="1">')
+    expect(sheet).toContain('<autoFilter ref="A1:B2"/>')
+
+    const styles = parts["xl/styles.xml"]
+    expect(styles).toContain('<b/><color rgb="FFFFFFFF"/>')
+    expect(styles).toContain('<fgColor rgb="FF1E3A5F"/>')
+    expect(styles).toContain('<alignment horizontal="center" vertical="center" wrapText="1"/>')
   })
 })
 

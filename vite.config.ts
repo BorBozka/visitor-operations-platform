@@ -15,4 +15,17 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, "server/**", "e2e/**"],
   },
+  // React, React Router and the scheduler are the framework runtime behind every route, so they
+  // are always in the entry graph and can never be lazy-loaded away. Splitting them out keeps the
+  // app entry chunk under Rollup's 500 kB warning threshold and lets browsers reuse the cached
+  // framework across app deploys.
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(id)) return "react-runtime"
+        },
+      },
+    },
+  },
 })

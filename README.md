@@ -66,7 +66,7 @@ yapılandırmasını yönetebildiği modüler bir yapıya sahiptir.
 - Tailwind CSS ve shadcn/ui
 - React Hook Form ve Zod
 - date-fns ve Recharts
-- XLSX/xlsx-js-style, jsPDF/jspdf-autotable, html2canvas ve CSV export
+- write-excel-file, jsPDF/jspdf-autotable, html2canvas ve CSV export
 
 ### Backend ve veritabanı
 

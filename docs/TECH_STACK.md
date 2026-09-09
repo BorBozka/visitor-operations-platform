@@ -9,7 +9,7 @@
 - React Hook Form and Zod
 - date-fns
 - Recharts
-- XLSX / xlsx-js-style, jsPDF / jspdf-autotable, html2canvas, and native CSV downloads
+- write-excel-file, jsPDF / jspdf-autotable, html2canvas, and native CSV downloads
 
 The frontend is a production-oriented single-page application. Runtime domain access goes
 through `Http*` service adapters and the shared HTTP client; there is no runtime mock fallback.
