@@ -1,9 +1,30 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
+import { ApiError } from "../lib/api-error.js"
 import { withWriteConflictRetry } from "../lib/prisma-conflict.js"
 import { parseResourceType, type FacilityResource, type ResourceInput } from "../modules/resources/types.js"
 import type { ResourceRepository } from "./resource-repository.js"
 
 const TERMINAL_VISIT_STATUSES = ["CHECKED_OUT", "CANCELLED", "NO_SHOW"]
+const VEHICLE_PLATE_UNIQUE_INDEX = "Resource_companyId_licensePlate_key"
+
+function isDuplicateLicensePlateError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error) || (error as { code: unknown }).code !== "P2002") return false
+  const candidate = error as { message?: unknown; meta?: { target?: unknown } }
+  const target = candidate.meta?.target
+  const targetText = Array.isArray(target) ? target.map(String).join(",") : String(target ?? "")
+  const message = String(candidate.message ?? "")
+  return targetText.includes(VEHICLE_PLATE_UNIQUE_INDEX)
+    || (targetText.includes("companyId") && targetText.includes("licensePlate"))
+    || message.includes(VEHICLE_PLATE_UNIQUE_INDEX)
+}
+
+function duplicateLicensePlate(): ApiError {
+  return new ApiError(409, "DUPLICATE_LICENSE_PLATE", "Bu şirket için aynı plakaya sahip bir araç zaten kayıtlı.")
+}
+
+function resourceInUse(): ApiError {
+  return new ApiError(409, "RESOURCE_IN_USE", "Bu kaynak aktif veya planlanmış bir operasyonda kullanıldığı için değiştirilemez.")
+}
 
 /**
  * References that make deleting this resource destroy live planning rather than history: a
@@ -65,8 +86,32 @@ export class PrismaResourceRepository implements ResourceRepository {
   constructor(private readonly prisma: PrismaClient) {}
   async list(filters: { includeInactive: boolean; companyId?: string; facilityId?: string; type?: string }) { const rows = await this.prisma.resource.findMany({ where: { ...(filters.includeInactive ? {} : { active: true }), ...(filters.companyId ? { companyId: filters.companyId } : {}), ...(filters.facilityId ? { facilityId: filters.facilityId } : {}), ...(filters.type ? { type: filters.type } : {}) }, include, orderBy: { createdAt: "asc" } }); return rows.map(toResource) }
   async find(id: string) { const row = await this.prisma.resource.findUnique({ where: { id }, include }); return row ? toResource(row) : null }
-  async save(input: ResourceInput, id?: string, active = true) { const row = id ? await this.prisma.resource.update({ where: { id }, data: updateData(input), include }) : await this.prisma.resource.create({ data: createData(input, active), include }); return toResource(row) }
-  async setActive(id: string, active: boolean) { return toResource(await this.prisma.resource.update({ where: { id }, data: { active }, include })) }
+  async save(input: ResourceInput, id?: string, active = true) {
+    try {
+      const row = id
+        ? await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+          const current = await tx.resource.findUnique({ where: { id }, select: { companyId: true, facilityId: true } })
+          if (!current) throw new ApiError(404, "NOT_FOUND", "Kaynak bulunamadı.")
+          const scopeChanges = current.companyId !== input.companyId || current.facilityId !== input.facilityId
+          if (scopeChanges && await countLiveReferences(tx, id) > 0) throw resourceInUse()
+          return tx.resource.update({ where: { id }, data: updateData(input), include })
+        }, { isolationLevel: "Serializable" }))
+        : await this.prisma.resource.create({ data: createData(input, active), include })
+      return toResource(row)
+    } catch (error) {
+      if (isDuplicateLicensePlateError(error)) throw duplicateLicensePlate()
+      throw error
+    }
+  }
+  async setActive(id: string, active: boolean) {
+    if (active) return toResource(await this.prisma.resource.update({ where: { id }, data: { active }, include }))
+    return toResource(await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+      const current = await tx.resource.findUnique({ where: { id }, select: { id: true } })
+      if (!current) throw new ApiError(404, "NOT_FOUND", "Kaynak bulunamadı.")
+      if (await countLiveReferences(tx, id) > 0) throw resourceInUse()
+      return tx.resource.update({ where: { id }, data: { active: false }, include })
+    }, { isolationLevel: "Serializable" })))
+  }
   /**
    * Checks live references and deletes in one serializable transaction so no booking can slip in
    * between the two. `ResourceAssignment.resourceId` is nulled by the database (ON DELETE SET

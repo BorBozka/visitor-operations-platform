@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client"
+import type { Prisma, PrismaClient } from "@prisma/client"
 
 import { ApiError } from "../lib/api-error.js"
 import { parseEnum } from "../lib/parse-enum.js"
@@ -158,8 +158,9 @@ export class PrismaTransportAssignmentRepository implements TransportAssignmentR
   async create(input: PersistTransportAssignmentInput) {
     try {
       const created = await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
-        await this.assertNoOverlap(tx, input, undefined)
-        return tx.transportAssignment.create({ data: { ...toData(input), status: "ACTIVE" }, include })
+        const verifiedInput = await this.revalidateResources(tx, input)
+        await this.assertNoOverlap(tx, verifiedInput, undefined)
+        return tx.transportAssignment.create({ data: { ...toData(verifiedInput), status: "ACTIVE" }, include })
       }, { isolationLevel: "Serializable" }))
       return toTransportAssignmentDto(created)
     } catch (error) {
@@ -173,8 +174,9 @@ export class PrismaTransportAssignmentRepository implements TransportAssignmentR
         const current = await tx.transportAssignment.findUnique({ where: { id }, select: { status: true } })
         if (!current) throw new ApiError(404, "NOT_FOUND", "Planlı atama bulunamadı.")
         if (current.status === "CANCELLED") throw new ApiError(409, "TRANSPORT_ASSIGNMENT_NOT_EDITABLE", "İptal edilen atama düzenlenemez.")
-        await this.assertNoOverlap(tx, input, id)
-        return tx.transportAssignment.update({ where: { id }, data: toData(input), include })
+        const verifiedInput = await this.revalidateResources(tx, input)
+        await this.assertNoOverlap(tx, verifiedInput, id)
+        return tx.transportAssignment.update({ where: { id }, data: toData(verifiedInput), include })
       }, { isolationLevel: "Serializable" }))
       return toTransportAssignmentDto(updated)
     } catch (error) {
@@ -185,6 +187,46 @@ export class PrismaTransportAssignmentRepository implements TransportAssignmentR
   async cancel(id: string) {
     const changed = await this.prisma.transportAssignment.updateMany({ where: { id, status: "ACTIVE" }, data: { status: "CANCELLED" } })
     return changed.count === 0 ? null : this.find(id)
+  }
+
+  private async revalidateResources(
+    tx: Prisma.TransactionClient,
+    input: PersistTransportAssignmentInput,
+  ): Promise<PersistTransportAssignmentInput> {
+    const resources = await tx.resource.findMany({
+      where: { id: { in: [input.vehicleResourceId, input.driverResourceId] } },
+      select: {
+        id: true, type: true, companyId: true, facilityId: true, active: true,
+        brand: true, model: true, licensePlate: true, fullName: true,
+      },
+    })
+    const byId = new Map(resources.map((resource) => [resource.id, resource]))
+    const vehicle = byId.get(input.vehicleResourceId)
+    const driver = byId.get(input.driverResourceId)
+    if (!vehicle
+      || !driver
+      || !vehicle.active
+      || !driver.active
+      || vehicle.type !== "VEHICLE"
+      || driver.type !== "DRIVER"
+      || vehicle.companyId !== input.companyId
+      || vehicle.facilityId !== input.facilityId
+      || driver.companyId !== input.companyId
+      || driver.facilityId !== input.facilityId
+      || !vehicle.brand
+      || !vehicle.model
+      || !vehicle.licensePlate
+      || !driver.fullName) {
+      throw CONFLICT()
+    }
+    return {
+      ...input,
+      companyId: vehicle.companyId,
+      facilityId: vehicle.facilityId,
+      vehicleName: `${vehicle.brand} ${vehicle.model}`.trim(),
+      vehicleLicensePlate: vehicle.licensePlate,
+      driverName: driver.fullName,
+    }
   }
 
   private async assertNoOverlap(

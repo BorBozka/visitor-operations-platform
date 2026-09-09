@@ -31,7 +31,12 @@ function rowFor(input: ResourceInput) {
 function repositoryFor(input: ResourceInput) {
   const create = vi.fn().mockResolvedValue(rowFor(input))
   const update = vi.fn().mockResolvedValue(rowFor(input))
-  const prisma = { resource: { create, update } } as unknown as PrismaClient
+  const tx = {
+    resource: { create, update, findUnique: vi.fn().mockResolvedValue({ companyId: input.companyId, facilityId: input.facilityId }) },
+    resourceAssignment: { count: vi.fn().mockResolvedValue(0) },
+    transportAssignment: { count: vi.fn().mockResolvedValue(0) },
+  }
+  const prisma = { ...tx, $transaction: async (run: (client: typeof tx) => Promise<unknown>) => run(tx) } as unknown as PrismaClient
   return { repository: new PrismaResourceRepository(prisma), create, update }
 }
 
@@ -118,5 +123,57 @@ describe("PrismaResourceRepository resource relation payloads", () => {
         driverDocuments: { deleteMany: {}, create: [{ name: "Yeni Belge" }] },
       }),
     }))
+  })
+})
+
+describe("PrismaResourceRepository vehicle plate uniqueness", () => {
+  const vehicle = { type: "VEHICLE", companyId: "company-1", facilityId: "facility-1", brand: "Ford", model: "Transit", licensePlate: "34 ABC 123" } satisfies ResourceInput
+  const duplicatePlateError = {
+    code: "P2002",
+    meta: { target: "Resource_companyId_licensePlate_key" },
+    message: "Unique constraint failed on Resource_companyId_licensePlate_key",
+  }
+
+  it.each([
+    { operation: "create", id: undefined },
+    { operation: "update", id: "resource-1" },
+  ])("maps a $operation race on the filtered index to the plate-specific 409", async ({ id }) => {
+    const create = vi.fn().mockRejectedValue(duplicatePlateError)
+    const update = vi.fn().mockRejectedValue(duplicatePlateError)
+    const tx = {
+      resource: { create, update, findUnique: vi.fn().mockResolvedValue({ companyId: vehicle.companyId, facilityId: vehicle.facilityId }) },
+      resourceAssignment: { count: vi.fn().mockResolvedValue(0) },
+      transportAssignment: { count: vi.fn().mockResolvedValue(0) },
+    }
+    const repository = new PrismaResourceRepository({
+      ...tx, $transaction: async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+    } as unknown as PrismaClient)
+
+    await expect(repository.save(vehicle, id)).rejects.toMatchObject({ statusCode: 409, code: "DUPLICATE_LICENSE_PLATE" })
+  })
+
+  it("blocks disabling or moving a resource held by a live assignment", async () => {
+    const update = vi.fn()
+    const tx = {
+      resource: { update, findUnique: vi.fn().mockResolvedValue({ id: "resource-1", companyId: "company-1", facilityId: "facility-1" }) },
+      resourceAssignment: { count: vi.fn().mockResolvedValue(1) },
+      transportAssignment: { count: vi.fn().mockResolvedValue(0) },
+    }
+    const repository = new PrismaResourceRepository({
+      ...tx, $transaction: async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+    } as unknown as PrismaClient)
+
+    await expect(repository.setActive("resource-1", false)).rejects.toMatchObject({ statusCode: 409, code: "RESOURCE_IN_USE" })
+    await expect(repository.save({ ...vehicle, facilityId: "facility-2" }, "resource-1")).rejects.toMatchObject({ statusCode: 409, code: "RESOURCE_IN_USE" })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it("does not misclassify a different unique constraint", async () => {
+    const otherUniqueError = { code: "P2002", meta: { target: ["resourceId", "name"] } }
+    const repository = new PrismaResourceRepository({
+      resource: { create: vi.fn().mockRejectedValue(otherUniqueError) },
+    } as unknown as PrismaClient)
+
+    await expect(repository.save(vehicle)).rejects.toBe(otherUniqueError)
   })
 })

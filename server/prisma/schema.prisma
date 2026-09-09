@@ -390,6 +390,10 @@ model Resource {
   vehicleTransportAssignments TransportAssignment[]      @relation("TransportVehicle")
   driverTransportAssignments  TransportAssignment[]      @relation("TransportDriver")
 
+  // Vehicle plates are unique inside one company through the filtered SQL Server index
+  // Resource_companyId_licensePlate_key (WHERE [licensePlate] IS NOT NULL), created in
+  // 20260909160000_resource_vehicle_plate_unique. Prisma cannot express filtered indexes, so a
+  // generated migration must preserve it manually.
   @@index([companyId, facilityId, type, active])
 }
 

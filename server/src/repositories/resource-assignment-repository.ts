@@ -96,6 +96,7 @@ function visitsAllCancelled(visits: { status: string }[]): boolean {
 }
 
 type PrismaLike = PrismaClient | Prisma.TransactionClient
+const ASSIGNMENT_CONFLICT = () => new ApiError(409, "RESOURCE_ASSIGNMENT_CONFLICT", "Kaynak durumu değişti, lütfen tekrar deneyin.")
 
 export class PrismaResourceAssignmentRepository implements ResourceAssignmentRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -125,16 +126,17 @@ export class PrismaResourceAssignmentRepository implements ResourceAssignmentRep
         const context = await this.loadContextWith(tx, meetingId)
         if (!context) throw new ApiError(404, "NOT_FOUND", "Toplantı bulunamadı.")
         assertMeetingResourcesMutable(context.meeting)
+        const verifiedAssignments = await this.revalidateResources(tx, context.meeting, assignments)
         assertAssignmentSetValid({
           window: context.meeting,
           facilityId: context.meeting.facilityId,
           others: context.others,
-          assignments,
+          assignments: verifiedAssignments,
         })
         await tx.resourceAssignment.deleteMany({ where: { meetingId } })
-        if (assignments.length > 0) {
+        if (verifiedAssignments.length > 0) {
           await tx.resourceAssignment.createMany({
-            data: assignments.map((assignment) => ({
+            data: verifiedAssignments.map((assignment) => ({
               meetingId,
               resourceId: assignment.resourceId,
               resourceType: assignment.resourceType,
@@ -150,7 +152,7 @@ export class PrismaResourceAssignmentRepository implements ResourceAssignmentRep
     } catch (error) {
       if (error instanceof ApiError) throw error
       if (isWriteConflictError(error)) {
-        throw new ApiError(409, "RESOURCE_ASSIGNMENT_CONFLICT", "Kaynak durumu değişti, lütfen tekrar deneyin.")
+        throw ASSIGNMENT_CONFLICT()
       }
       throw error
     }
@@ -167,6 +169,45 @@ export class PrismaResourceAssignmentRepository implements ResourceAssignmentRep
       newPlannedEnd: newPlannedEnd.toISOString(),
       currentAssignments: assignmentViewsToNew(context.currentAssignments),
       others: context.others,
+    })
+  }
+
+  private async revalidateResources(
+    tx: Prisma.TransactionClient,
+    meeting: MeetingContext,
+    assignments: NewAssignment[],
+  ): Promise<NewAssignment[]> {
+    if (assignments.length === 0) return []
+    const rows = await tx.resource.findMany({
+      where: { id: { in: assignments.map((assignment) => assignment.resourceId) } },
+      select: { id: true, type: true, companyId: true, facilityId: true, name: true, totalQuantity: true, active: true },
+    })
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    return assignments.map((requested) => {
+      const resource = byId.get(requested.resourceId)
+      if (!resource
+        || !resource.active
+        || resource.type !== requested.resourceType
+        || (resource.type !== "ROOM" && resource.type !== "POOLED_EQUIPMENT")
+        || resource.companyId !== meeting.hostCompanyId
+        || resource.facilityId !== meeting.facilityId
+        || !resource.name) {
+        throw ASSIGNMENT_CONFLICT()
+      }
+      if (resource.type === "POOLED_EQUIPMENT"
+        && (!Number.isInteger(resource.totalQuantity) || (resource.totalQuantity ?? 0) <= 0)) {
+        throw ASSIGNMENT_CONFLICT()
+      }
+      return {
+        resourceId: resource.id,
+        resourceType: resource.type,
+        resourceName: resource.name,
+        companyId: resource.companyId,
+        facilityId: resource.facilityId,
+        totalQuantity: resource.type === "POOLED_EQUIPMENT" ? resource.totalQuantity : null,
+        requestedQuantity: resource.type === "POOLED_EQUIPMENT" ? requested.requestedQuantity : null,
+      }
     })
   }
 
