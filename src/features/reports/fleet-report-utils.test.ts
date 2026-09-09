@@ -186,6 +186,24 @@ function assignment(id: string, overrides: Partial<PlannedTransportAssignment> =
   return { id, companyId: "bplas", companyName: "BPLAS A.Ş.", facilityId: "bplas-merkez", facilityName: "Merkez Tesis", plannedStart: "2026-08-10T08:00:00+03:00", plannedEnd: "2026-08-10T09:00:00+03:00", purpose: "Test görevi", vehicleResourceId: "vehicle-1", vehicleName: "Transit", vehicleLicensePlate: "16 BPL 101", driverResourceId: "driver-1", driverName: "Ayşe Demir", status: "ACTIVE", createdAt: "2026-08-10T08:00:00+03:00", ...overrides }
 }
 
+describe("fleet report with a hard-deleted catalog resource", () => {
+  // A vehicle/driver can only be deleted once nothing ACTIVE still holds it, so the historical
+  // assignment keeps its name/plate snapshot with a null resource id.
+  const deleted = assignment("a5", { vehicleResourceId: null, vehicleName: "Silinmiş Araç", driverResourceId: null, driverName: "Silinmiş Şoför", status: "CANCELLED" })
+
+  it("still counts the record and keeps its snapshot labels", () => {
+    expect(calculateFleetReportMetrics([...reportAssignments, deleted])).toMatchObject({ totalAssignments: 5, cancelledAssignments: 2 })
+    expect(searchFleetReportRecords([deleted], "Silinmiş Araç")).toHaveLength(1)
+  })
+
+  it("leaves it out of per-resource load rather than grouping every deleted resource together", () => {
+    const alsoDeleted = assignment("a6", { vehicleResourceId: null, vehicleName: "Başka Silinmiş Araç", driverResourceId: null, driverName: "Başka Silinmiş Şoför", status: "CANCELLED" })
+
+    expect(aggregateFleetResourceLoad([...reportAssignments, deleted, alsoDeleted], "vehicles").map((resource) => resource.resourceId))
+      .toEqual(["vehicle-transit", "vehicle-sprinter"])
+  })
+})
+
 function meeting(id: string, hostEmployeeName: string): Meeting {
   return { id, creatorEmployeeId: "creator-1", visitTypeId: "meeting", visitTypeName: "Toplantı", hostEmployeeId: "host-1", hostEmployeeName, hostCompanyId: "bplas", hostCompanyName: "BPLAS A.Ş.", facilityId: "bplas-merkez", facilityName: "Merkez Tesis", plannedStart: "2026-08-10T08:00:00+03:00", plannedEnd: "2026-08-10T09:00:00+03:00", hasAdditionalRequirements: false, createdAt: "2026-08-10T08:00:00+03:00", updatedAt: "2026-08-10T08:00:00+03:00" }
 }

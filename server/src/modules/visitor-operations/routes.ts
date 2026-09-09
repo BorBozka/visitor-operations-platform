@@ -55,6 +55,7 @@ export async function registerVisitorOperationsRoutes(app: FastifyInstance, depe
   app.patch("/api/admin/visitor-cards/:id/status", { preHandler: adminGuard }, async (request) => service.setCardActive(parsed(idParams.safeParse(request.params)).id, parsed(z.object({ active: z.boolean() }).strict().safeParse(request.body)).active))
   app.post("/api/admin/visitor-cards/:id/mark-lost", { preHandler: adminGuard }, async (request) => service.markCardLost(parsed(idParams.safeParse(request.params)).id))
   app.post("/api/admin/visitor-cards/:id/restore", { preHandler: adminGuard }, async (request) => service.restoreCard(parsed(idParams.safeParse(request.params)).id))
+  app.delete("/api/admin/visitor-cards/:id", { preHandler: adminGuard }, async (request, reply) => { await service.deleteCard(parsed(idParams.safeParse(request.params)).id); return reply.status(204).send() })
 
   app.get("/api/security/visitor-cards/available", { preHandler: securityGuard }, async () => service.getAvailableCards())
   app.get("/api/security/visitor-rules/active", { preHandler: securityGuard }, async () => service.getActiveRule())

@@ -167,6 +167,10 @@ export function aggregateFleetResourceLoad(assignments: PlannedTransportAssignme
   for (const assignment of assignments) {
     if (assignment.status === "CANCELLED") continue
     const resourceId = dimension === "vehicles" ? assignment.vehicleResourceId : assignment.driverResourceId
+    // Load is grouped by immutable resource id, so an assignment that lost its catalog reference
+    // cannot be grouped. A deleted resource never has an ACTIVE assignment left, so nothing that
+    // still carries load is dropped here.
+    if (resourceId === null) continue
     const resourceName = dimension === "vehicles" ? assignment.vehicleName : assignment.driverName
     const current = grouped.get(resourceId)
     const plannedMinutes = getAssignmentDurationMinutes(assignment)

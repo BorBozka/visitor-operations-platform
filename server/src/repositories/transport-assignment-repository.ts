@@ -24,8 +24,8 @@ export interface PersistTransportAssignmentInput {
 
 export interface OverlappingActiveAssignment {
   id: string
-  vehicleResourceId: string
-  driverResourceId: string
+  vehicleResourceId: string | null
+  driverResourceId: string | null
 }
 
 export interface TransportAssignmentRepository {
@@ -53,10 +53,10 @@ type Row = {
   plannedStart: Date
   plannedEnd: Date
   purpose: string
-  vehicleResourceId: string
+  vehicleResourceId: string | null
   vehicleName: string
   vehicleLicensePlate: string
-  driverResourceId: string
+  driverResourceId: string | null
   driverName: string
   relatedMeetingId: string | null
   relatedVisitId: string | null

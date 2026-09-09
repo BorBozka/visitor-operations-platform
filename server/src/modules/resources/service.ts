@@ -1,6 +1,5 @@
 import { ApiError } from "../../lib/api-error.js"
 import { matchesScopeFilter, resolveScopeFilter, scopeAllows, type AccessContext } from "../../lib/authorization.js"
-import { isPrismaForeignKeyError } from "../../lib/prisma-conflict.js"
 import type { ResourceRepository } from "../../repositories/resource-repository.js"
 import { normalizeLicensePlate, type ResourceInput } from "./types.js"
 
@@ -46,20 +45,15 @@ export class ResourceService {
   async setActive(id: string, active: boolean, ctx?: AccessContext) { await this.get(id, ctx); return this.repository.setActive(id, active) }
 
   /**
-   * Hard delete. Its `DriverLicenseClass` / `DriverDocument` sub-rows go with it; a resource
-   * still referenced by an (immutable, historical) assignment cannot be deleted and must be
-   * deactivated instead.
+   * Hard delete. Its `DriverLicenseClass` / `DriverDocument` sub-rows go with it, and historical
+   * assignments stay — they keep their own name/type/quantity snapshot and only lose the live
+   * catalog reference. Assignment *history* therefore never blocks a delete; a resource still held
+   * by an open Meeting or an ACTIVE transport assignment does, and must be deactivated instead.
    */
   async remove(id: string, ctx?: AccessContext) {
     await this.get(id, ctx)
-    try {
-      await this.repository.delete(id)
-    } catch (error) {
-      if (isPrismaForeignKeyError(error)) {
-        throw new ApiError(409, "RESOURCE_IN_USE", "Bu kaynağın atama geçmişi olduğu için silinemez; pasife alın.")
-      }
-      throw error
-    }
+    const deleted = await this.repository.delete(id)
+    if (!deleted) throw new ApiError(409, "RESOURCE_IN_USE", "Bu kaynak aktif veya planlanmış bir operasyonda kullanıldığı için silinemez; pasife alın.")
   }
 
   private async validateInput(input: ResourceInput, excludeId?: string): Promise<ResourceInput> {

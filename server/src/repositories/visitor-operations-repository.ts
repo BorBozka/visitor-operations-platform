@@ -159,6 +159,13 @@ export interface VisitorOperationsRepository {
   saveCard(input: { cardNumber: string; cardNumberNormalized: string; status?: VisitorCardStatus }): Promise<VisitorCardDto>
   updateCard(id: string, input: { cardNumber: string; cardNumberNormalized: string; status: VisitorCardStatus }, expected: VisitorCardExpectedState): Promise<VisitorCardDto>
   setCardStatus(id: string, status: VisitorCardStatus, expected: VisitorCardExpectedState): Promise<VisitorCardDto>
+  /**
+   * Hard delete of an out-of-circulation card. Visit history is kept: `Visit.visitorCardNumber`
+   * is its own snapshot and `Visit.visitorCardId` is nulled by the database (ON DELETE SET NULL).
+   * `expected` is re-asserted in the delete statement itself, so a card that just moved back into
+   * operational use raises a conflict instead of being deleted.
+   */
+  deleteCard(id: string, expected: VisitorCardExpectedState): Promise<void>
   checkIn(visitId: string, input: SecurityCheckInInput, now: Date): Promise<{ visit: VisitDto; hostEmail?: string; hostName?: string }>
   checkOut(visitId: string, cardReturned: boolean, now: Date): Promise<void>
   listUnreturnedIssues(): Promise<{ card: VisitorCardDto; visit: VisitDto }[]>
@@ -317,6 +324,16 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
   }
   async setCardStatus(id: string, status: VisitorCardStatus, expected: VisitorCardExpectedState) {
     return this.mutateCard(id, { status, ...(status === "AVAILABLE" || status === "DISABLED" ? { currentVisitId: null, assignedVisitorName: null } : {}) }, expected)
+  }
+  async deleteCard(id: string, expected: VisitorCardExpectedState) {
+    try {
+      const deleted = await this.prisma.visitorCard.deleteMany({ where: { id, status: expected.status, currentVisitId: expected.currentVisitId } })
+      if (deleted.count !== 1) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+    } catch (error) {
+      if (error instanceof VisitorCardConflictError) throw error
+      if (isWriteConflictError(error)) throw new VisitorCardConflictError("CARD_STATE_CHANGED")
+      throw error
+    }
   }
   private async mutateCard(id: string, data: Prisma.VisitorCardUpdateManyMutationInput, expected: VisitorCardExpectedState) {
     try {

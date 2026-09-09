@@ -90,6 +90,26 @@ describe("visitor-card lifecycle HTTP conflicts", () => {
     expect(response.json()).toMatchObject({ error: { code: "CARD_OPERATIONAL" } })
   })
 
+  it("deletes an AVAILABLE card over HTTP with 204 and no body", async () => {
+    const deletedIds: string[] = []
+    const app = await createApp("ADMIN", { findCard: async () => availableCard, deleteCard: async (id: string) => { deletedIds.push(id) } })
+
+    const response = await app.inject({ method: "DELETE", url: "/api/admin/visitor-cards/card-1" })
+
+    expect(response.statusCode).toBe(204)
+    expect(response.body).toBe("")
+    expect(deletedIds).toEqual(["card-1"])
+  })
+
+  it("returns 409 CARD_OPERATIONAL when deleting a card that is still in circulation", async () => {
+    const app = await createApp("ADMIN", { findCard: async () => inUseCard })
+
+    const response = await app.inject({ method: "DELETE", url: "/api/admin/visitor-cards/card-1" })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ error: { code: "CARD_OPERATIONAL" } })
+  })
+
   it("returns 409 when an Admin rename loses the card expected-state race", async () => {
     const app = await createApp("ADMIN", {
       findCard: async () => availableCard,

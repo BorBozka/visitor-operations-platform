@@ -182,6 +182,7 @@ function createFakeAdminService() {
     updateVisitorCardInventory: notCalled("updateVisitorCardInventory"),
     markVisitorCardLost: notCalled("markVisitorCardLost"),
     restoreVisitorCard: notCalled("restoreVisitorCard"),
+    deleteVisitorCard: notCalled("deleteVisitorCard"),
     publishVisitorRule: notCalled("publishVisitorRule"),
     saveOperationalSettings: notCalled("saveOperationalSettings"),
   }

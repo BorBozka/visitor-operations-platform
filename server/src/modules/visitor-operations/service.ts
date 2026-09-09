@@ -250,6 +250,18 @@ export class VisitorOperationsService {
     return this.runCardMutation(() => this.repository.setCardStatus(id, "AVAILABLE", this.expectedCardState(card)))
   }
 
+  /**
+   * Hard delete. Past visits keep their own `visitorCardNumber` snapshot and simply lose the live
+   * card reference, so history never blocks this. The card's own lifecycle does: IN_USE,
+   * NOT_RETURNED and LOST all still need a physical resolution (check-out, late return, write-off)
+   * and must not be closed out by deleting the record.
+   */
+  async deleteCard(id: string) {
+    const card = await this.requireCard(id)
+    if (!["AVAILABLE", "DISABLED"].includes(card.status)) throw new ApiError(409, "CARD_OPERATIONAL", "Kullanımdaki, iade edilmemiş veya kayıp kart silinemez.")
+    await this.runCardMutation(() => this.repository.deleteCard(id, this.expectedCardState(card)))
+  }
+
   async getAvailableCards() { return (await this.repository.listCards()).filter((card) => card.status === "AVAILABLE") }
 
   /** Security operations are confined to the gate user's company/facility scope. */

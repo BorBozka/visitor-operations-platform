@@ -25,6 +25,9 @@ export interface AdminService {
   updateVisitorCardInventory(id: string, input: UpdateVisitorCardInventoryInput): Promise<VisitorCardInventoryItem>
   markVisitorCardLost(id: string): Promise<VisitorCardInventoryItem>
   restoreVisitorCard(id: string): Promise<VisitorCardInventoryItem>
+  // Permanent. Past visits keep their own card-number snapshot; the backend refuses a card that is
+  // still operationally in circulation with 409.
+  deleteVisitorCard(id: string): Promise<void>
   getVisitorRuleVersions(): Promise<VisitorRuleVersion[]>
   publishVisitorRule(content: string): Promise<VisitorRuleVersion>
   getOperationalSettings(): Promise<OperationalSettings>

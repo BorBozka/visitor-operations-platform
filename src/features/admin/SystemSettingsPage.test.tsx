@@ -35,6 +35,19 @@ describe("System settings workspace patterns", () => {
     expect(source).not.toContain("Kullanım bilgisi</th>")
   })
 
+  it("offers a permanent visitor-card delete behind the project's destructive confirmation dialog", () => {
+    // The row action is offered exactly where the card is Admin-managed (AVAILABLE / DISABLED);
+    // the backend stays authoritative and its 409 message is surfaced in the dialog.
+    expect(source).toContain("Kartı kalıcı olarak sil")
+    expect(source).toContain("<DeleteCardDialog")
+    expect(source).toContain("Ziyaretçi Kartını Sil")
+    expect(source).toContain("Kalıcı olarak sil")
+    expect(source).toContain("Geçmiş ziyaret kayıtları ve üzerlerinde görünen kart numarası korunur.")
+    expect(source).toContain("deleteVisitorCard")
+    expect(source).toContain('variant="destructive"')
+    expect(source).toContain('role="alert"')
+  })
+
   it("draws a bottom border below the final visit type and visitor card rows", () => {
     expect(source.match(/<tbody className="divide-y border-b">/g)).toHaveLength(2)
   })

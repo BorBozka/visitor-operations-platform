@@ -23,6 +23,17 @@ describe("MeetingResourcePanel empty states", () => {
     expect(componentSource).not.toContain("Kullanılabilir: {maxQty} adet")
   })
 
+  it("keeps showing an assignment whose catalog resource was deleted without re-submitting it", () => {
+    // resourceId is null for such an assignment, so list keys and draft edits go through draftKey
+    // and draftToDesired drops it instead of sending a null resource id back to the API.
+    expect(componentSource).toContain("resourceId: string | null")
+    expect(componentSource).toContain("draftKey: `persisted-${a.id}`")
+    expect(componentSource).toContain("draftKey: `saved-${v.id}`")
+    expect(componentSource).toContain("equipment: draft.equipment.flatMap((e) => e.resourceId === null ? [] : [{")
+    expect(componentSource).toContain("editingDraftKey === item.draftKey")
+    expect(componentSource).not.toContain("editingResourceId")
+  })
+
   it("shares the closed-or-terminal read-only predicate and reports only persisted assignments", () => {
     expect(componentSource).toContain("isMeetingResourceReadOnly(meeting, visits)")
     expect(componentSource).toContain("(persistedDraft.room ? 1 : 0) + persistedDraft.equipment.length")

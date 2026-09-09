@@ -142,6 +142,10 @@ export class HttpAdminService implements AdminService {
     return mapVisitorCard(await apiClient.post<VisitorCardDto>(`/admin/visitor-cards/${encodeURIComponent(id)}/restore`))
   }
 
+  async deleteVisitorCard(id: string): Promise<void> {
+    await apiClient.delete<void>(`/admin/visitor-cards/${encodeURIComponent(id)}`)
+  }
+
   async getVisitorRuleVersions(): Promise<VisitorRuleVersion[]> {
     return (await apiClient.get<VisitorRuleDto[]>("/admin/visitor-rules")).map(mapVisitorRule)
   }

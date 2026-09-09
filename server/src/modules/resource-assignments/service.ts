@@ -1,7 +1,7 @@
 import { ApiError } from "../../lib/api-error.js"
 import { scopeAllows, type AccessContext } from "../../lib/authorization.js"
 import {
-  assignmentViewToNew,
+  assignmentViewsToNew,
   type AssignmentMeetingContext,
   type ResourceAssignmentRepository,
 } from "../../repositories/resource-assignment-repository.js"
@@ -88,7 +88,7 @@ export class ResourceAssignmentService {
     }
     const context = await this.loadContext(current.meetingId, ctx)
     assertMeetingResourcesMutable(context.meeting)
-    const next = context.currentAssignments.map(assignmentViewToNew).map((assignment) =>
+    const next = assignmentViewsToNew(context.currentAssignments).map((assignment) =>
       assignment.resourceType === "POOLED_EQUIPMENT" && assignment.resourceId === current.resourceId
         ? { ...assignment, requestedQuantity }
         : assignment,
@@ -103,9 +103,7 @@ export class ResourceAssignmentService {
     if (!current) throw new ApiError(404, "NOT_FOUND", "Atama bulunamadı.")
     const context = await this.loadContext(current.meetingId, ctx)
     assertMeetingResourcesMutable(context.meeting)
-    const next = context.currentAssignments
-      .filter((view) => view.id !== assignmentId)
-      .map(assignmentViewToNew)
+    const next = assignmentViewsToNew(context.currentAssignments.filter((view) => view.id !== assignmentId))
     await this.commit(current.meetingId, context, next)
   }
 
@@ -134,7 +132,7 @@ export class ResourceAssignmentService {
       facilityId: context.meeting.facilityId,
       plannedStart: context.meeting.plannedStart,
       newPlannedEnd,
-      currentAssignments: context.currentAssignments.map(assignmentViewToNew),
+      currentAssignments: assignmentViewsToNew(context.currentAssignments),
       others: context.others,
     })
   }
@@ -183,15 +181,11 @@ function assertPositiveQuantity(quantity: number): void {
 }
 
 function roomAssignment(context: AssignmentMeetingContext): NewAssignment[] {
-  return context.currentAssignments
-    .filter((view) => view.resourceType === "ROOM")
-    .map(assignmentViewToNew)
+  return assignmentViewsToNew(context.currentAssignments.filter((view) => view.resourceType === "ROOM"))
 }
 
 function equipmentAssignments(context: AssignmentMeetingContext): NewAssignment[] {
-  return context.currentAssignments
-    .filter((view) => view.resourceType === "POOLED_EQUIPMENT")
-    .map(assignmentViewToNew)
+  return assignmentViewsToNew(context.currentAssignments.filter((view) => view.resourceType === "POOLED_EQUIPMENT"))
 }
 
 function roomToNew(room: RoomResource): NewAssignment {

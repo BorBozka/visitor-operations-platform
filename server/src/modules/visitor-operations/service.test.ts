@@ -5,7 +5,7 @@ import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
 import { CheckInConflictError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
-import type { MeetingDto, MeetingInput, VisitDto, VisitorRuleDto, VisitStatus } from "./types.js"
+import type { MeetingDto, MeetingInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
 
 const now = new Date("2026-09-02T10:00:00.000Z")
 const scope = { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }
@@ -25,10 +25,46 @@ function unusedRepository(overrides: Record<string, unknown>): VisitorOperations
   return {
     listVisitTypes: async () => [], findVisitType: async () => null, saveVisitType: async () => { throw new Error("unused") }, listMeetings: async () => [], listVisits: async () => [], findMeeting: async () => null, findVisit: async () => null,
     findEmployeeByUserId: async () => null, findEmployeeById: async () => null, findActiveEmployeeByName: async () => null, getReferenceData: async () => ({}), createMeeting: async () => { throw new Error("unused") }, updateMeeting: async () => { throw new Error("unused") }, updateMeetingTimes: async () => undefined, extendMeetingTimes: async () => undefined, cancelVisit: async () => undefined, cancelMeeting: async () => undefined, closeMeeting: async () => undefined,
-    prepareInvitation: async () => { throw new Error("unused") }, finishInvitation: async () => undefined, findPublicPreRegistration: async () => null, updatePublicVisitor: async () => undefined, acceptPublicRule: async () => { throw new Error("unused") }, listRules: async () => [], getActiveRule: async () => null, publishRule: async () => { throw new Error("unused") }, listCards: async () => [], findCard: async () => null, saveCard: async () => { throw new Error("unused") }, updateCard: async () => { throw new Error("unused") }, setCardStatus: async () => { throw new Error("unused") }, checkIn: async () => { throw new Error("unused") }, checkOut: async () => undefined, listUnreturnedIssues: async () => [], lateReturn: async () => undefined, createUnplanned: async () => { throw new Error("unused") }, correctVisitor: async () => undefined,
+    prepareInvitation: async () => { throw new Error("unused") }, finishInvitation: async () => undefined, findPublicPreRegistration: async () => null, updatePublicVisitor: async () => undefined, acceptPublicRule: async () => { throw new Error("unused") }, listRules: async () => [], getActiveRule: async () => null, publishRule: async () => { throw new Error("unused") }, listCards: async () => [], findCard: async () => null, saveCard: async () => { throw new Error("unused") }, updateCard: async () => { throw new Error("unused") }, setCardStatus: async () => { throw new Error("unused") }, deleteCard: async () => undefined, checkIn: async () => { throw new Error("unused") }, checkOut: async () => undefined, listUnreturnedIssues: async () => [], lateReturn: async () => undefined, createUnplanned: async () => { throw new Error("unused") }, correctVisitor: async () => undefined,
     ...overrides,
   } as VisitorOperationsRepository
 }
+
+const cardAt = "2026-09-08T09:00:00.000Z"
+function card(overrides: Partial<VisitorCardDto> = {}): VisitorCardDto {
+  return { id: "card-1", cardNumber: "001", status: "AVAILABLE", createdAt: cardAt, updatedAt: cardAt, ...overrides }
+}
+
+describe("VisitorOperationsService card deletion", () => {
+  it.each(["AVAILABLE", "DISABLED"] as const)("deletes an out-of-circulation %s card, asserting its expected state", async (status) => {
+    const deleted: { id: string; expected: unknown }[] = []
+    const service = new VisitorOperationsService(unusedRepository({
+      findCard: async () => card({ status }),
+      deleteCard: async (id: string, expected: unknown) => { deleted.push({ id, expected }) },
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteCard("card-1")).resolves.toBeUndefined()
+    expect(deleted).toEqual([{ id: "card-1", expected: { status, currentVisitId: null } }])
+  })
+
+  it.each(["IN_USE", "NOT_RETURNED", "LOST"] as const)("refuses to delete a %s card so its lifecycle cannot be bypassed", async (status) => {
+    const service = new VisitorOperationsService(unusedRepository({
+      findCard: async () => card({ status, assignedVisitId: "visit-1" }),
+      deleteCard: async () => { throw new Error("must not delete") },
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteCard("card-1")).rejects.toMatchObject({ statusCode: 409, code: "CARD_OPERATIONAL" })
+  })
+
+  it("maps a lost expected-state race to a card conflict instead of deleting", async () => {
+    const service = new VisitorOperationsService(unusedRepository({
+      findCard: async () => card(),
+      deleteCard: async () => { throw new VisitorCardConflictError("CARD_STATE_CHANGED") },
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteCard("card-1")).rejects.toMatchObject({ statusCode: 409, code: "CARD_STATE_CONFLICT" })
+  })
+})
 
 function invitationFixture(initial = visit()) {
   let current = initial

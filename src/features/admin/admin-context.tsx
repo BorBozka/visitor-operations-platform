@@ -18,6 +18,7 @@ interface AdminContextValue {
   saveOrganizationEntity(kind: OrganizationKind, entity: Omit<OrganizationEntity, "id"> & { id?: string }): Promise<OrganizationEntity>
   markVisitorCardLost(id: string): Promise<VisitorCardInventoryItem>
   restoreVisitorCard(id: string): Promise<VisitorCardInventoryItem>
+  deleteVisitorCard(id: string): Promise<void>
 }
 
 const AdminContext = createContext<AdminContextValue | null>(null)
@@ -51,7 +52,11 @@ export function AdminProvider({ service, children }: { service: AdminService; ch
     await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
     return updated
   }, [loader, service])
-  const value = useMemo(() => ({ ...data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard }), [data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard])
+  const deleteVisitorCard = useCallback(async (id: string) => {
+    await service.deleteVisitorCard(id)
+    await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
+  }, [loader, service])
+  const value = useMemo(() => ({ ...data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard }), [data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard])
   return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>
 }
 

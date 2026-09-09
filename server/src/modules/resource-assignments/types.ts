@@ -2,11 +2,12 @@ import type { PooledEquipmentResource, RoomResource } from "../resources/types.j
 
 // Immutable assignment snapshot. Historical projections are produced entirely from these
 // stored values, so a later rename/deactivate/delete of the catalog resource never rewrites
-// what a past Meeting assignment showed.
+// what a past Meeting assignment showed. `resourceId` is the live catalog reference only, and is
+// null once that Resource has been hard-deleted; the snapshot fields below still describe it.
 export interface RoomAssignmentView {
   id: string
   meetingId: string
-  resourceId: string
+  resourceId: string | null
   resourceType: "ROOM"
   resourceName: string
   companyId: string
@@ -17,7 +18,7 @@ export interface RoomAssignmentView {
 export interface EquipmentAssignmentView {
   id: string
   meetingId: string
-  resourceId: string
+  resourceId: string | null
   resourceType: "POOLED_EQUIPMENT"
   resourceName: string
   companyId: string

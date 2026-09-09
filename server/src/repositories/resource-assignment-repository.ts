@@ -45,7 +45,7 @@ export interface ResourceAssignmentRepository extends ResourceExtensionGuard {
 type AssignmentRow = {
   id: string
   meetingId: string
-  resourceId: string
+  resourceId: string | null
   resourceType: string
   resourceName: string
   companyId: string
@@ -69,8 +69,14 @@ function toAssignmentView(row: AssignmentRow): ResourceAssignmentView {
   return { ...base, resourceType: "POOLED_EQUIPMENT", totalQuantity: row.totalQuantity ?? 0, requestedQuantity: row.requestedQuantity ?? 0 }
 }
 
-export function assignmentViewToNew(view: ResourceAssignmentView): NewAssignment {
-  return {
+/**
+ * The re-committable part of a Meeting's current assignments. A view whose catalog Resource was
+ * hard-deleted has no live `resourceId`, so it can never take part in a new write and is dropped:
+ * a Meeting holding one is already closed/terminal history, which `assertMeetingResourcesMutable`
+ * refuses to modify anyway.
+ */
+export function assignmentViewsToNew(views: ResourceAssignmentView[]): NewAssignment[] {
+  return views.flatMap((view) => view.resourceId === null ? [] : [{
     resourceId: view.resourceId,
     resourceType: view.resourceType,
     resourceName: view.resourceName,
@@ -78,7 +84,7 @@ export function assignmentViewToNew(view: ResourceAssignmentView): NewAssignment
     facilityId: view.facilityId,
     totalQuantity: view.resourceType === "POOLED_EQUIPMENT" ? view.totalQuantity : null,
     requestedQuantity: view.resourceType === "POOLED_EQUIPMENT" ? view.requestedQuantity : null,
-  }
+  }])
 }
 
 function visitsAllTerminal(visits: { status: string }[]): boolean {
@@ -159,7 +165,7 @@ export class PrismaResourceAssignmentRepository implements ResourceAssignmentRep
       facilityId: context.meeting.facilityId,
       plannedStart: context.meeting.plannedStart,
       newPlannedEnd: newPlannedEnd.toISOString(),
-      currentAssignments: context.currentAssignments.map(assignmentViewToNew),
+      currentAssignments: assignmentViewsToNew(context.currentAssignments),
       others: context.others,
     })
   }
@@ -201,11 +207,13 @@ export class PrismaResourceAssignmentRepository implements ResourceAssignmentRep
         plannedStart: row.plannedStart.toISOString(),
         plannedEnd: row.plannedEnd.toISOString(),
         excludedFromCapacity: row.actualMeetingEnd !== null || visitsAllCancelled(row.visits),
-        assignments: row.resourceAssignments.map((assignment) => ({
+        // Assignments whose catalog Resource was deleted are dropped: they consume no capacity
+        // and, being all-NULL, would otherwise compare equal to each other in the conflict math.
+        assignments: row.resourceAssignments.flatMap((assignment) => assignment.resourceId === null ? [] : [{
           resourceId: assignment.resourceId,
           resourceType: assignment.resourceType,
           requestedQuantity: assignment.requestedQuantity,
-        })),
+        }]),
       })),
       eligibleRooms: eligible.filter((resource): resource is RoomResource => resource.type === "ROOM"),
       eligibleEquipment: eligible.filter((resource): resource is PooledEquipmentResource => resource.type === "POOLED_EQUIPMENT"),

@@ -26,15 +26,18 @@ import { isMeetingResourceReadOnly } from "@/lib/meeting-lifecycle"
 // Types
 // ---------------------------------------------------------------------------
 
+// A persisted assignment whose catalog resource was hard-deleted keeps its snapshot name but has
+// no resourceId left. Such an assignment can only appear on an already-immutable Meeting, so it is
+// displayed and never re-submitted (see draftToDesired).
 interface DraftRoom {
-  resourceId: string
+  resourceId: string | null
   resourceName: string
 }
 
 interface DraftEquipmentItem {
-  /** Stable key for React lists — assigned on draft-add. */
+  /** Stable key for React lists and draft edits — unique even without a resourceId. */
   draftKey: string
-  resourceId: string
+  resourceId: string | null
   resourceName: string
   requestedQuantity: number
   /** Used for display only; sourced from catalog at load-time. */
@@ -50,10 +53,10 @@ interface ResourceDraft {
 function draftToDesired(draft: ResourceDraft): DesiredResourceState {
   return {
     roomResourceId: draft.room?.resourceId ?? null,
-    equipment: draft.equipment.map((e) => ({
+    equipment: draft.equipment.flatMap((e) => e.resourceId === null ? [] : [{
       resourceId: e.resourceId,
       requestedQuantity: e.requestedQuantity,
-    })),
+    }]),
   }
 }
 
@@ -135,7 +138,7 @@ export function MeetingResourcePanel({
   const [pickerEquipId, setPickerEquipId] = useState<string | null>(null)
   const [pickerQty, setPickerQty] = useState(1)
   // Edit-in-place for existing draft equipment
-  const [editingResourceId, setEditingResourceId] = useState<string | null>(null)
+  const [editingDraftKey, setEditingDraftKey] = useState<string | null>(null)
   const [editQty, setEditQty] = useState(1)
 
   // Save/error state
@@ -151,7 +154,7 @@ export function MeetingResourcePanel({
     setIsRoomPickerOpen(false)
     setIsEquipPickerOpen(false)
     setPickerEquipId(null)
-    setEditingResourceId(null)
+    setEditingDraftKey(null)
     setErrorBanner(null)
 
     try {
@@ -170,7 +173,7 @@ export function MeetingResourcePanel({
           ? { resourceId: roomAsgn.resourceId, resourceName: roomAsgn.resourceName }
           : null,
         equipment: equipAsgnList.map((a) => ({
-          draftKey: `persisted-${a.resourceId}`,
+          draftKey: `persisted-${a.id}`,
           resourceId: a.resourceId,
           resourceName: a.resourceName,
           requestedQuantity: (a as { requestedQuantity?: number }).requestedQuantity ?? 0,
@@ -211,7 +214,7 @@ export function MeetingResourcePanel({
     if (computedReadOnly) return
     setIsEquipPickerOpen(false)
     setPickerEquipId(null)
-    setEditingResourceId(null)
+    setEditingDraftKey(null)
     setIsRoomPickerOpen(true)
   }
 
@@ -231,7 +234,7 @@ export function MeetingResourcePanel({
   function openEquipPicker() {
     if (computedReadOnly) return
     setIsRoomPickerOpen(false)
-    setEditingResourceId(null)
+    setEditingDraftKey(null)
     setPickerEquipId(null)
     setPickerQty(1)
     setIsEquipPickerOpen(true)
@@ -264,31 +267,31 @@ export function MeetingResourcePanel({
     setPickerEquipId(null)
   }
 
-  function openEditEquip(resourceId: string, currentQty: number) {
+  function openEditEquip(draftKey: string, currentQty: number) {
     if (computedReadOnly) return
     setIsRoomPickerOpen(false)
     setIsEquipPickerOpen(false)
     setPickerEquipId(null)
-    setEditingResourceId(resourceId)
+    setEditingDraftKey(draftKey)
     setEditQty(currentQty)
   }
 
-  function applyEditEquip(resourceId: string) {
+  function applyEditEquip(draftKey: string) {
     setDraft((prev) => ({
       ...prev,
       equipment: prev.equipment.map((e) =>
-        e.resourceId === resourceId ? { ...e, requestedQuantity: editQty } : e,
+        e.draftKey === draftKey ? { ...e, requestedQuantity: editQty } : e,
       ),
     }))
-    setEditingResourceId(null)
+    setEditingDraftKey(null)
   }
 
-  function removeDraftEquipment(resourceId: string) {
+  function removeDraftEquipment(draftKey: string) {
     setDraft((prev) => ({
       ...prev,
-      equipment: prev.equipment.filter((e) => e.resourceId !== resourceId),
+      equipment: prev.equipment.filter((e) => e.draftKey !== draftKey),
     }))
-    if (editingResourceId === resourceId) setEditingResourceId(null)
+    if (editingDraftKey === draftKey) setEditingDraftKey(null)
   }
 
   function discardDraft() {
@@ -296,7 +299,7 @@ export function MeetingResourcePanel({
     setIsRoomPickerOpen(false)
     setIsEquipPickerOpen(false)
     setPickerEquipId(null)
-    setEditingResourceId(null)
+    setEditingDraftKey(null)
     setErrorBanner(null)
   }
 
@@ -316,7 +319,7 @@ export function MeetingResourcePanel({
       const newPersisted: ResourceDraft = {
         room: roomView ? { resourceId: roomView.resourceId, resourceName: roomView.resourceName } : null,
         equipment: equipViews.map((v) => ({
-          draftKey: `saved-${v.resourceId}`,
+          draftKey: `saved-${v.id}`,
           resourceId: v.resourceId,
           resourceName: v.resourceName,
           requestedQuantity: (v as { requestedQuantity?: number }).requestedQuantity ?? 0,
@@ -326,7 +329,7 @@ export function MeetingResourcePanel({
       }
       setPersistedDraft(newPersisted)
       setDraft(newPersisted)
-      setEditingResourceId(null)
+      setEditingDraftKey(null)
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "Kaynak atamaları kaydedilemedi.")
       // Refresh eligibility so stale conflict/capacity info is not shown after a failed save.
@@ -731,7 +734,7 @@ export function MeetingResourcePanel({
         ) : (
           <ul className="space-y-2" aria-label="Taslak ekipman atamaları">
             {draft.equipment.map((item) => {
-              const isEditing = editingResourceId === item.resourceId && !computedReadOnly
+              const isEditing = editingDraftKey === item.draftKey && !computedReadOnly
               const info = eligibleEquipment.find((e) => e.resource.id === item.resourceId)
               // maxAssignableQuantity: service excludes THIS meeting, so remainingQuantity
               // is the full capacity available to this meeting — no addback needed.
@@ -798,7 +801,7 @@ export function MeetingResourcePanel({
                           variant="ghost"
                           size="sm"
                           className="h-7 text-xs font-medium"
-                          onClick={() => setEditingResourceId(null)}
+                          onClick={() => setEditingDraftKey(null)}
                         >
                           Vazgeç
                         </Button>
@@ -807,7 +810,7 @@ export function MeetingResourcePanel({
                           size="sm"
                           className="h-7 text-xs"
                           disabled={editQty <= 0 || editQty > maxQtyForEdit}
-                          onClick={() => applyEditEquip(item.resourceId)}
+                          onClick={() => applyEditEquip(item.draftKey)}
                         >
                           <Check className="mr-1 size-3" />
                           Uygula
@@ -833,7 +836,7 @@ export function MeetingResourcePanel({
                             size="sm"
                             variant="outline"
                             className="h-7 gap-1 text-xs"
-                            onClick={() => openEditEquip(item.resourceId, item.requestedQuantity)}
+                            onClick={() => openEditEquip(item.draftKey, item.requestedQuantity)}
                             disabled={saving}
                           >
                             <Pencil className="size-3" />
@@ -843,7 +846,7 @@ export function MeetingResourcePanel({
                             size="sm"
                             variant="ghost"
                             className="h-7 w-7 p-0 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                            onClick={() => removeDraftEquipment(item.resourceId)}
+                            onClick={() => removeDraftEquipment(item.draftKey)}
                             disabled={saving}
                             title="Ekipman atamasını kaldır"
                             aria-label="Ekipman atamasını kaldır"

@@ -4,7 +4,7 @@ import type { FacilityResource, ResourceInput } from "../types.js"
 const clone = <T>(value: T): T => structuredClone(value)
 export class InMemoryResourceRepository implements ResourceRepository {
   private resources: FacilityResource[]; private sequence = 0
-  constructor(resources: FacilityResource[] = [], private readonly validScopes: { companyId: string; facilityId: string }[] = []) { this.resources = clone(resources) }
+  constructor(resources: FacilityResource[] = [], private readonly validScopes: { companyId: string; facilityId: string }[] = [], private readonly liveReferenceIds: string[] = []) { this.resources = clone(resources) }
   async list(filters: { includeInactive: boolean; companyId?: string; facilityId?: string; type?: string }) { return clone(this.resources.filter((resource) => (filters.includeInactive || resource.isActive) && (!filters.companyId || resource.companyId === filters.companyId) && (!filters.facilityId || resource.facilityId === filters.facilityId) && (!filters.type || resource.type === filters.type))) }
   async find(id: string) { const resource = this.resources.find((candidate) => candidate.id === id); return resource ? clone(resource) : null }
   async save(input: ResourceInput, id?: string, active = true) {
@@ -19,7 +19,8 @@ export class InMemoryResourceRepository implements ResourceRepository {
     return clone(resource)
   }
   async setActive(id: string, active: boolean) { const old = await this.find(id); if (!old) throw new Error("Resource not found"); const updated = { ...old, isActive: active }; this.resources = this.resources.map((candidate) => candidate.id === id ? updated : candidate); return updated }
-  async delete(id: string) { this.resources = this.resources.filter((candidate) => candidate.id !== id) }
+  /** `liveReferenceIds` stands in for the repository's in-transaction live-reference check. */
+  async delete(id: string) { if (this.liveReferenceIds.includes(id)) return false; this.resources = this.resources.filter((candidate) => candidate.id !== id); return true }
   async companyAndFacilityExist(companyId: string, facilityId: string) { return this.validScopes.some((scope) => scope.companyId === companyId && scope.facilityId === facilityId) }
   async findVehicleByCompanyAndPlate(companyId: string, licensePlate: string, excludeId?: string) { const resource = this.resources.find((candidate) => candidate.id !== excludeId && candidate.type === "VEHICLE" && candidate.companyId === companyId && candidate.licensePlate === licensePlate); return resource ? clone(resource) : null }
 }

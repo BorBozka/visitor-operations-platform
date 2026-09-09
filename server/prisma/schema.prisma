@@ -280,7 +280,9 @@ model Visit {
 
   meeting              Meeting               @relation(fields: [meetingId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   visitor              Visitor               @relation(fields: [visitorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  visitorCard          VisitorCard?          @relation("VisitorCardHistory", fields: [visitorCardId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Historical reference only — visitorCardNumber above is the authoritative snapshot, so
+  // deleting the catalog card nulls this column and keeps the Visit row.
+  visitorCard          VisitorCard?          @relation("VisitorCardHistory", fields: [visitorCardId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   currentOnCard        VisitorCard?          @relation("CurrentVisitorCard")
   cancelledByUser      User?                  @relation("VisitCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   ruleAcceptances      VisitRuleAcceptance[]
@@ -410,10 +412,13 @@ model DriverDocument {
   @@unique([resourceId, name], map: "DriverDocument_resourceId_name_key")
 }
 
+// A Meeting's resource booking. The snapshot columns (resourceType/resourceName/companyId/
+// facilityId/totalQuantity/requestedQuantity) are the authoritative history; resourceId is only a
+// live catalog reference and becomes NULL when the Resource is hard-deleted.
 model ResourceAssignment {
   id                String       @id @default(cuid()) @db.VarChar(36)
   meetingId         String       @db.VarChar(36)
-  resourceId        String       @db.VarChar(36)
+  resourceId        String?      @db.VarChar(36)
   resourceType      String       @db.VarChar(32)
   resourceName      String       @db.NVarChar(200)
   companyId         String       @db.VarChar(36)
@@ -422,10 +427,16 @@ model ResourceAssignment {
   requestedQuantity Int?
   createdAt         DateTime     @default(now()) @db.DateTime2
 
-  meeting  Meeting  @relation(fields: [meetingId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  resource Resource @relation(fields: [resourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  meeting  Meeting   @relation(fields: [meetingId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  resource Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
-  @@unique([meetingId, resourceId], map: "ResourceAssignment_meetingId_resourceId_key")
+  // No Prisma @@unique here on purpose: a SQL Server UNIQUE constraint treats NULLs as equal, so
+  // it would let only ONE assignment per Meeting keep a deleted resource. The same-Meeting +
+  // same-Resource invariant is enforced instead by the filtered unique index
+  // ResourceAssignment_meetingId_resourceId_key (WHERE [resourceId] IS NOT NULL) created in
+  // 20260909140000_catalog_deletion_snapshot_contract. Prisma cannot express a filtered index, so
+  // a generated migration will propose dropping it — remove that statement, exactly as for
+  // VisitorCard_currentVisitId_key.
   @@index([resourceId])
 }
 
@@ -436,10 +447,10 @@ model TransportAssignment {
   plannedStart        DateTime                  @db.DateTime2
   plannedEnd          DateTime                  @db.DateTime2
   purpose             String                    @db.NVarChar(1000)
-  vehicleResourceId   String                    @db.VarChar(36)
+  vehicleResourceId   String?                   @db.VarChar(36)
   vehicleName         String                    @db.NVarChar(200)
   vehicleLicensePlate String                    @db.VarChar(32)
-  driverResourceId    String                    @db.VarChar(36)
+  driverResourceId    String?                   @db.VarChar(36)
   driverName          String                    @db.NVarChar(200)
   relatedMeetingId    String?                   @db.VarChar(36)
   relatedVisitId      String?                   @db.VarChar(36)
@@ -449,8 +460,13 @@ model TransportAssignment {
 
   company        Company   @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   facility       Facility  @relation(fields: [facilityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vehicle        Resource  @relation("TransportVehicle", fields: [vehicleResourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  driver         Resource  @relation("TransportDriver", fields: [driverResourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // vehicleResourceId/driverResourceId are live catalog references; vehicleName,
+  // vehicleLicensePlate and driverName are the authoritative history and never change. Both FKs
+  // stay NoAction because SQL Server rejects two ON DELETE SET NULL paths from one table to the
+  // same parent (error 1785, "multiple cascade paths"); PrismaResourceRepository.delete() nulls
+  // these two columns inside the same transaction as the Resource delete instead.
+  vehicle        Resource? @relation("TransportVehicle", fields: [vehicleResourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  driver         Resource? @relation("TransportDriver", fields: [driverResourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   relatedMeeting Meeting?  @relation(fields: [relatedMeetingId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   relatedVisit   Visit?    @relation(fields: [relatedVisitId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

@@ -35,6 +35,47 @@ function repositoryFor(input: ResourceInput) {
   return { repository: new PrismaResourceRepository(prisma), create, update }
 }
 
+function deleteRepositoryFor(liveReferences: { assignments: number; transports: number }) {
+  const calls: string[] = []
+  const tx = {
+    resourceAssignment: { count: async () => { calls.push("count:resourceAssignment"); return liveReferences.assignments } },
+    transportAssignment: {
+      count: async () => { calls.push("count:transportAssignment"); return liveReferences.transports },
+      updateMany: async ({ where }: { where: Record<string, unknown> }) => { calls.push(`null:${Object.keys(where)[0]}`); return { count: 1 } },
+    },
+    driverLicenseClass: { deleteMany: async () => { calls.push("delete:driverLicenseClass"); return { count: 0 } } },
+    driverDocument: { deleteMany: async () => { calls.push("delete:driverDocument"); return { count: 0 } } },
+    resource: { delete: async () => { calls.push("delete:resource"); return {} } },
+  }
+  const prisma = { $transaction: async (run: (client: typeof tx) => Promise<boolean>) => run(tx) } as unknown as PrismaClient
+  return { repository: new PrismaResourceRepository(prisma), calls }
+}
+
+describe("PrismaResourceRepository hard delete", () => {
+  it("nulls the transport snapshots' catalog references and deletes owned driver sub-rows", async () => {
+    const { repository, calls } = deleteRepositoryFor({ assignments: 0, transports: 0 })
+
+    await expect(repository.delete("resource-1")).resolves.toBe(true)
+
+    expect(calls).toEqual([
+      "count:resourceAssignment", "count:transportAssignment",
+      "null:vehicleResourceId", "null:driverResourceId",
+      "delete:driverLicenseClass", "delete:driverDocument", "delete:resource",
+    ])
+  })
+
+  it.each([
+    { label: "an open Meeting's resource assignment", liveReferences: { assignments: 1, transports: 0 } },
+    { label: "an ACTIVE transport assignment", liveReferences: { assignments: 0, transports: 1 } },
+  ])("writes nothing when the resource is still held by $label", async ({ liveReferences }) => {
+    const { repository, calls } = deleteRepositoryFor(liveReferences)
+
+    await expect(repository.delete("resource-1")).resolves.toBe(false)
+
+    expect(calls.every((call) => call.startsWith("count:"))).toBe(true)
+  })
+})
+
 describe("PrismaResourceRepository resource relation payloads", () => {
   it.each([
     { type: "ROOM", companyId: "company-1", facilityId: "facility-1", name: "Toplantı Odası" },

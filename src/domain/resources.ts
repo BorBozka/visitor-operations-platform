@@ -109,7 +109,8 @@ interface ResourceAssignmentSnapshot {
 export interface RoomAssignment extends ResourceAssignmentSnapshot {
   id: string
   meetingId: string
-  resourceId: string
+  /** Live catalog reference; null once that Resource was deleted. resourceName still applies. */
+  resourceId: string | null
   resourceType: "ROOM"
   createdAt: string
 }
@@ -117,7 +118,8 @@ export interface RoomAssignment extends ResourceAssignmentSnapshot {
 export interface EquipmentAssignment extends ResourceAssignmentSnapshot {
   id: string
   meetingId: string
-  resourceId: string
+  /** Live catalog reference; null once that Resource was deleted. resourceName still applies. */
+  resourceId: string | null
   resourceType: "POOLED_EQUIPMENT"
   totalQuantity: number
   requestedQuantity: number

@@ -11,8 +11,10 @@ export function getTransportAssignmentEditValues(assignment: PlannedTransportAss
     date: format(new Date(assignment.plannedStart), "yyyy-MM-dd"),
     ...getTransportAssignmentFormTimes(assignment),
     purpose: assignment.purpose,
-    vehicleResourceId: assignment.vehicleResourceId,
-    driverResourceId: assignment.driverResourceId,
+    // A new/edited assignment always needs a live resource; an assignment whose catalog resource
+    // was deleted starts with an empty selection, which the form's own validation rejects.
+    vehicleResourceId: assignment.vehicleResourceId ?? "",
+    driverResourceId: assignment.driverResourceId ?? "",
     relatedKind: assignment.relatedMeetingId ? "meeting" : assignment.relatedVisitId ? "visit" : "none",
     relatedId: assignment.relatedMeetingId ?? assignment.relatedVisitId ?? "",
   }

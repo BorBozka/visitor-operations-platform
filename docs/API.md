@@ -204,10 +204,14 @@ active immutable rule acceptance. Invalid, cancelled, and completed invitation l
 same generic not-found response and no internal organization/user data.
 
 Admin inventory/rule endpoints are `GET/POST /api/admin/visitor-cards`,
-`PATCH /api/admin/visitor-cards/:id`, `/status`, `/mark-lost`, `/restore`, and
+`PATCH /api/admin/visitor-cards/:id`, `/status`, `/mark-lost`, `/restore`,
+`DELETE /api/admin/visitor-cards/:id`, and
 `GET/POST /api/admin/visitor-rules`. Card ownership is enforced as
 `AVAILABLE|DISABLED` (Admin), `IN_USE|NOT_RETURNED` (Security), and
-`NOT_RETURNED → LOST → AVAILABLE` for admin write-off/restore. Rule publishing atomically
+`NOT_RETURNED → LOST → AVAILABLE` for admin write-off/restore. `DELETE` hard-deletes an
+`AVAILABLE|DISABLED` card; a card still in circulation (`IN_USE`, `NOT_RETURNED`, `LOST`) returns
+`409 CARD_OPERATIONAL` so deletion cannot bypass its lifecycle. Past visits are never deleted:
+`Visit.visitorCardNumber` is their own snapshot and `Visit.visitorCardId` becomes `NULL`. Rule publishing atomically
 deactivates the prior version and creates the next active immutable version.
 
 Security endpoints are `GET /api/security/visitor-cards/available`,
@@ -348,8 +352,12 @@ ownership-checked server-side, derived entirely from the session:
   VISIT_MUTATION_FORBIDDEN`. Security operations outside scope return `403 OUT_OF_SCOPE`.
 
 `DELETE /api/resources/:id` (`MANAGER`/`ADMIN`) hard-deletes a catalog resource and its owned
-driver license-class / document rows; a resource still referenced by an immutable assignment
-snapshot returns `409 RESOURCE_IN_USE` and must be deactivated instead.
+driver license-class / document rows. Assignment *history* never blocks it: a past
+`ResourceAssignment` / `TransportAssignment` survives with its own name/type/plate/quantity
+snapshot and only its live resource id set to `NULL`. A resource still held by a live operation —
+a `ResourceAssignment` on an open Meeting, or an `ACTIVE` `TransportAssignment` — returns
+`409 RESOURCE_IN_USE` and must be deactivated instead. The reference check and the delete run in
+one serializable transaction, so a booking cannot slip in between them.
 
 `AUTH_RATE_LIMIT_MAX` (default `10`) sets the per-minute-per-IP login attempt limit; an E2E run
 raises it so its many rapid seeded logins are not throttled.

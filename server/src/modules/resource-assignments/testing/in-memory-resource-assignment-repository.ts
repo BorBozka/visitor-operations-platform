@@ -1,6 +1,6 @@
 import { ApiError } from "../../../lib/api-error.js"
 import {
-  assignmentViewToNew,
+  assignmentViewsToNew,
   type AssignmentMeetingContext,
   type ResourceAssignmentRepository,
 } from "../../../repositories/resource-assignment-repository.js"
@@ -99,11 +99,11 @@ export class InMemoryResourceAssignmentRepository implements ResourceAssignmentR
             || (other.visitStatuses.length > 0 && other.visitStatuses.every((status) => status === "CANCELLED")),
           assignments: this.assignments
             .filter((item) => item.meetingId === other.id)
-            .map((item) => ({
+            .flatMap((item) => item.resourceId === null ? [] : [{
               resourceId: item.resourceId,
               resourceType: item.resourceType,
               requestedQuantity: item.resourceType === "POOLED_EQUIPMENT" ? item.requestedQuantity : null,
-            })),
+            }]),
         }))
         .filter((other) => other.assignments.length > 0),
       eligibleRooms: eligible.filter((resource): resource is RoomResource => resource.type === "ROOM"),
@@ -128,4 +128,4 @@ export class InMemoryResourceAssignmentRepository implements ResourceAssignmentR
 }
 
 // Re-exported so unit tests do not need to reach into conflicts.ts for the enum helper.
-export { assignmentViewToNew }
+export { assignmentViewsToNew }

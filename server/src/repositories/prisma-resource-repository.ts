@@ -1,6 +1,31 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
+import { withWriteConflictRetry } from "../lib/prisma-conflict.js"
 import { parseResourceType, type FacilityResource, type ResourceInput } from "../modules/resources/types.js"
 import type { ResourceRepository } from "./resource-repository.js"
+
+const TERMINAL_VISIT_STATUSES = ["CHECKED_OUT", "CANCELLED", "NO_SHOW"]
+
+/**
+ * References that make deleting this resource destroy live planning rather than history: a
+ * ROOM/POOLED_EQUIPMENT booked by a Meeting that is still open (same "still mutable" rule as
+ * `assertMeetingResourcesMutable`), or a VEHICLE/DRIVER held by an ACTIVE transport assignment.
+ * Terminal/historical assignments are not counted — they keep working from their snapshots.
+ */
+async function countLiveReferences(tx: Prisma.TransactionClient, resourceId: string): Promise<number> {
+  const openMeetingAssignments = await tx.resourceAssignment.count({
+    where: {
+      resourceId,
+      meeting: {
+        actualMeetingEnd: null,
+        OR: [{ visits: { none: {} } }, { visits: { some: { status: { notIn: TERMINAL_VISIT_STATUSES } } } }],
+      },
+    },
+  })
+  const activeTransportAssignments = await tx.transportAssignment.count({
+    where: { status: "ACTIVE", OR: [{ vehicleResourceId: resourceId }, { driverResourceId: resourceId }] },
+  })
+  return openMeetingAssignments + activeTransportAssignments
+}
 
 const include = { company: { select: { name: true } }, facility: { select: { name: true } }, driverLicenseClasses: { select: { value: true } }, driverDocuments: { select: { name: true } } } as const
 type Row = { id: string; type: string; companyId: string; facilityId: string; name: string | null; totalQuantity: number | null; brand: string | null; model: string | null; licensePlate: string | null; fullName: string | null; canDriveCommercialVehicles: boolean | null; active: boolean; createdAt: Date; updatedAt: Date; company: { name: string }; facility: { name: string }; driverLicenseClasses: { value: string }[]; driverDocuments: { name: string }[] }
@@ -42,7 +67,23 @@ export class PrismaResourceRepository implements ResourceRepository {
   async find(id: string) { const row = await this.prisma.resource.findUnique({ where: { id }, include }); return row ? toResource(row) : null }
   async save(input: ResourceInput, id?: string, active = true) { const row = id ? await this.prisma.resource.update({ where: { id }, data: updateData(input), include }) : await this.prisma.resource.create({ data: createData(input, active), include }); return toResource(row) }
   async setActive(id: string, active: boolean) { return toResource(await this.prisma.resource.update({ where: { id }, data: { active }, include })) }
-  async delete(id: string) { await this.prisma.$transaction([this.prisma.driverLicenseClass.deleteMany({ where: { resourceId: id } }), this.prisma.driverDocument.deleteMany({ where: { resourceId: id } }), this.prisma.resource.delete({ where: { id } })]) }
+  /**
+   * Checks live references and deletes in one serializable transaction so no booking can slip in
+   * between the two. `ResourceAssignment.resourceId` is nulled by the database (ON DELETE SET
+   * NULL); `TransportAssignment` cannot use that action (see the schema comment) so its two
+   * historical columns are nulled here, inside the same transaction.
+   */
+  async delete(id: string) {
+    return withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+      if (await countLiveReferences(tx, id) > 0) return false
+      await tx.transportAssignment.updateMany({ where: { vehicleResourceId: id }, data: { vehicleResourceId: null } })
+      await tx.transportAssignment.updateMany({ where: { driverResourceId: id }, data: { driverResourceId: null } })
+      await tx.driverLicenseClass.deleteMany({ where: { resourceId: id } })
+      await tx.driverDocument.deleteMany({ where: { resourceId: id } })
+      await tx.resource.delete({ where: { id } })
+      return true
+    }, { isolationLevel: "Serializable" }))
+  }
   async companyAndFacilityExist(companyId: string, facilityId: string) { return Boolean(await this.prisma.facility.findFirst({ where: { id: facilityId, companyId }, select: { id: true } })) }
   async findVehicleByCompanyAndPlate(companyId: string, licensePlate: string, excludeId?: string) { const row = await this.prisma.resource.findFirst({ where: { type: "VEHICLE", companyId, licensePlate, ...(excludeId ? { id: { not: excludeId } } : {}) }, include }); return row ? toResource(row) : null }
 }
