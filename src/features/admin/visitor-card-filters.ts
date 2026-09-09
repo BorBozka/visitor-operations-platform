@@ -5,8 +5,6 @@ export interface VisitorCardFilters {
   status: "all" | VisitorCardStatus
 }
 
-export const defaultVisitorCardFilters: VisitorCardFilters = { search: "", status: "all" }
-
 export function hasActiveVisitorCardFilters(filters: VisitorCardFilters) {
   return Boolean(filters.search.trim() || filters.status !== "all")
 }

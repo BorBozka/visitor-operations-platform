@@ -1,9 +1,5 @@
 import { ApiError } from "../../../lib/api-error.js"
-import {
-  assignmentViewsToNew,
-  type AssignmentMeetingContext,
-  type ResourceAssignmentRepository,
-} from "../../../repositories/resource-assignment-repository.js"
+import type { AssignmentMeetingContext, ResourceAssignmentRepository } from "../../../repositories/resource-assignment-repository.js"
 import type { FacilityResource, PooledEquipmentResource, RoomResource } from "../../resources/types.js"
 import { assertAssignmentSetValid, assertMeetingResourcesMutable, type NewAssignment, type OtherMeetingAssignments } from "../conflicts.js"
 import type { ResourceAssignmentView } from "../types.js"
@@ -126,6 +122,3 @@ export class InMemoryResourceAssignmentRepository implements ResourceAssignmentR
       : { ...base, resourceType: "POOLED_EQUIPMENT", totalQuantity: assignment.totalQuantity ?? 0, requestedQuantity: assignment.requestedQuantity ?? 0 }
   }
 }
-
-// Re-exported so unit tests do not need to reach into conflicts.ts for the enum helper.
-export { assignmentViewsToNew }

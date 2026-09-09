@@ -3,9 +3,6 @@ import type { AuthorizationScope } from "../lib/scope.js"
 export const applicationRoles = ["MANAGER", "ADMIN", "SECURITY", "EMPLOYEE"] as const
 export type ApplicationRole = (typeof applicationRoles)[number]
 
-/** Assigned scope with every dimension empty — a user with no explicit scope sees nothing. */
-export const EMPTY_AUTHORIZATION_SCOPE: AuthorizationScope = { companyIds: [], facilityIds: [], securityGateIds: [] }
-
 export const authenticationSources = ["ACTIVE_DIRECTORY", "LOCAL"] as const
 export type AuthenticationSource = (typeof authenticationSources)[number]
 

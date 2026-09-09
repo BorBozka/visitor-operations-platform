@@ -97,6 +97,8 @@ export function AuthProvider({ service, children }: { service: SessionService; c
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
+// The hook intentionally shares this module with its provider so the context remains private.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext)
   if (!context) throw new Error("useAuth, AuthProvider içinde kullanılmalıdır.")

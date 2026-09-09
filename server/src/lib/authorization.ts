@@ -1,5 +1,4 @@
 import type { ApplicationRole, SessionUser } from "../auth/auth-types.js"
-import { forbiddenError } from "./api-error.js"
 import { isWithinAuthorizationScope, type AuthorizationScope } from "./scope.js"
 
 /**
@@ -26,14 +25,6 @@ export function scopeAllows(
   target: { companyId: string; facilityId?: string; securityGateId?: string },
 ): boolean {
   return isWithinAuthorizationScope(ctx.scope, target)
-}
-
-/** {@link scopeAllows}, or throw `403`. */
-export function assertScopeAllows(
-  ctx: AccessContext,
-  target: { companyId: string; facilityId?: string; securityGateId?: string },
-): void {
-  if (!scopeAllows(ctx, target)) throw forbiddenError()
 }
 
 /**

@@ -23,14 +23,3 @@ export interface OrganizationSnapshot {
   departments: Department[]
   securityGates: SecurityGate[]
 }
-
-export const organizationSnapshotKeyByKind: Record<OrganizationKind, keyof OrganizationSnapshot> = {
-  COMPANY: "companies",
-  FACILITY: "facilities",
-  DEPARTMENT: "departments",
-  SECURITY_GATE: "securityGates",
-}
-
-export function normalizeOrganizationName(value: string) {
-  return value.trim().toLocaleLowerCase("tr-TR")
-}

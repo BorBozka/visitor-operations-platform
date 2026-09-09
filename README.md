@@ -71,7 +71,7 @@ yapılandırmasını yönetebildiği modüler bir yapıya sahiptir.
 ### Backend ve veritabanı
 
 - Node.js, TypeScript ve Fastify
-- Prisma ORM 6.15 ve Microsoft SQL Server
+- Prisma ORM 6.19.3 ve Microsoft SQL Server
 - Argon2id
 - HttpOnly cookie üzerinden opaque server-side sessions
 - Nodemailer ile log/SMTP teslim sınırı

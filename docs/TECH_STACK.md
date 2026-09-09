@@ -20,7 +20,7 @@ application runtime composition.
 
 - Node.js and TypeScript
 - Fastify
-- Prisma ORM 6.15
+- Prisma ORM 6.19.3
 - Microsoft SQL Server
 - Argon2id password hashing
 - Cryptographically random opaque sessions stored server-side; only the session token is sent in

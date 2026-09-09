@@ -50,8 +50,8 @@ Vitest has no separate config file and no jsdom/`@testing-library` setup — see
   `transport-assignments.ts`, `goods-movements.ts`). No logic beyond small label/derivation
   helpers (e.g. `getGoodsMovementDisplayStatus`).
 - `src/services/*` — domain service interfaces plus `http/Http*` production adapters.
-  `src/services/index.ts` wires only HTTP adapters; `Mock*` implementations remain as
-  deterministic unit/component test fixtures and are not a runtime fallback.
+  `src/services/index.ts` wires only HTTP adapters. Unit/component tests use focused local
+  fixtures, fakes, or stubs; there is no alternate application runtime composition.
 - `src/features/<domain>/*` — UI + feature-local logic (filtering, sorting, pagination,
   export), grouped by domain: `visits`, `manager`, `resources`, `transport`, `goods`, `reports`.
 - `src/components/app-shell/*` — Employee, Manager/Admin, and Security route shells (see Routing).
@@ -93,8 +93,8 @@ carries the Manager area's company/facility scope and refresh state separately.
 ### Reports feature
 
 `src/features/reports/` is a tabbed page (`Ziyaretler` / `Araç-Şoför` / `Mal Hareketi`) sharing
-one filter bar (date range + company/facility, URL-persisted like All Visits), one
-`ReportKpiCard` component, and one CSV/Excel/PDF export layer (`report-export.ts` —
+one filter bar (date range + company/facility, URL-persisted like All Visits), and one
+CSV/Excel/PDF export layer (`report-export.ts` —
 `downloadReportCsv/Excel/Pdf`, each tab supplies its own `ReportColumn[]` + row builder). The XLSX writer
 and jspdf/jspdf-autotable are dynamically imported only when an export button is clicked, so
 viewing the Reports page doesn't pull their weight into the initial bundle. Each tab has its own

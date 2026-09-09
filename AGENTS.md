@@ -93,8 +93,8 @@ carries the Manager area's company/facility scope and refresh state separately.
 ### Reports feature
 
 `src/features/reports/` is a tabbed page (`Ziyaretler` / `Araç-Şoför` / `Mal Hareketi`) sharing
-one filter bar (date range + company/facility, URL-persisted like All Visits), one
-`ReportKpiCard` component, and one CSV/Excel/PDF export layer (`report-export.ts` —
+one filter bar (date range + company/facility, URL-persisted like All Visits), and one
+CSV/Excel/PDF export layer (`report-export.ts` —
 `downloadReportCsv/Excel/Pdf`, each tab supplies its own `ReportColumn[]` + row builder). The XLSX writer
 and jspdf/jspdf-autotable are dynamically imported only when an export button is clicked, so
 viewing the Reports page doesn't pull their weight into the initial bundle. Each tab has its own
@@ -134,5 +134,3 @@ No jsdom, no `@testing-library/react` — not installed, not needed for how test
 - Domain-specific comparator functions (`compareVisits`, `compareGoodsMovements`,
   `compareResources`, etc.) intentionally stay local to their feature file — only the generic
   toggle/paginate mechanics are shared.
-
-## Imported Claude Cowork project instructions

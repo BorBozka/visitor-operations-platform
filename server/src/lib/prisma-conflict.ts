@@ -12,11 +12,6 @@ export function isWriteConflictError(error: unknown): boolean {
   return /deadlock|serializ|write conflict|snapshot isolation|lock request time out|1205|1222/.test(message)
 }
 
-/** True for a Prisma foreign-key constraint violation (P2003) — a referenced row still exists. */
-export function isPrismaForeignKeyError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "P2003"
-}
-
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**

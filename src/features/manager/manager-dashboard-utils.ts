@@ -105,10 +105,6 @@ export function getStatusCounts(visits: Visit[], now: Date, toleranceMinutes: nu
   }))
 }
 
-export function getOverdueVisits(visits: Visit[], now: Date, toleranceMinutes: number) {
-  return visits.filter((visit) => isVisitOverdue(visit, now, toleranceMinutes))
-}
-
 export function getDelayMinutes(visit: Visit, now: Date) {
   return Math.max(0, differenceInMinutes(now, new Date(visit.plannedEnd)))
 }

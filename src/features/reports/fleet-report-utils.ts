@@ -146,21 +146,6 @@ export function calculateFleetReportMetrics(assignments: PlannedTransportAssignm
   }
 }
 
-// Retained for existing consumers while the report UI uses calculateFleetReportMetrics. This is
-// deliberately a presentation-agnostic historical calculation; it does not reintroduce the old
-// four-card KPI layout or change the active-load semantics used by the analysis workspace.
-export function calculateFleetReportKpis(assignments: PlannedTransportAssignment[]) {
-  const total = assignments.length
-  const cancelled = assignments.filter((assignment) => assignment.status === "CANCELLED").length
-  const durations = assignments.map(getAssignmentDurationMinutes)
-  return {
-    total,
-    cancelled,
-    cancelRate: total === 0 ? 0 : (cancelled / total) * 100,
-    averagePlannedDurationMinutes: durations.length === 0 ? null : Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length),
-  }
-}
-
 export function aggregateFleetResourceLoad(assignments: PlannedTransportAssignment[], dimension: FleetReportDimension): FleetLoadResource[] {
   const grouped = new Map<string, FleetLoadResource>()
 
