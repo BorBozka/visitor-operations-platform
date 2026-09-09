@@ -4,6 +4,18 @@ import { getDemoSeedUsers, shouldSeedDemoData } from "../../prisma/seed-data.js"
 import { ConfigError, loadConfig } from "./env.js"
 
 describe("server configuration", () => {
+  const databaseUrl = "sqlserver://localhost:1433;database=visitor_operations;user=sa;password=not-a-secret;encrypt=true;trustServerCertificate=true"
+  const smtpConfig = {
+    EMAIL_DELIVERY_MODE: "smtp",
+    SMTP_HOST: "smtp.example.test",
+    SMTP_PORT: "465",
+    SMTP_SECURE: "true",
+    SMTP_USER: "user",
+    SMTP_PASSWORD: "test-only-password",
+    MAIL_FROM_ADDRESS: "no-reply@example.test",
+    MAIL_FROM_NAME: "Visitor",
+  }
+
   it("fails clearly when DATABASE_URL is missing or not a SQL Server URL", () => {
     expect(() => loadConfig({ WEB_ORIGIN: "http://localhost:5173" })).toThrow(ConfigError)
     expect(() => loadConfig({ DATABASE_URL: "postgresql://localhost/test" })).toThrow("Prisma SQL Server")
@@ -21,11 +33,23 @@ describe("server configuration", () => {
     })).toMatchObject({ apiPort: 3001, sessionTtlHours: 8, demoSeedEnabled: true })
   })
 
-  it("defaults delivery to non-sending log mode and rejects incomplete SMTP mode at startup", () => {
-    const base = { DATABASE_URL: "sqlserver://localhost:1433;database=visitor_operations;user=sa;password=not-a-secret;encrypt=true;trustServerCertificate=true" }
-    expect(loadConfig(base).emailDelivery).toMatchObject({ mode: "log" })
-    expect(() => loadConfig({ ...base, EMAIL_DELIVERY_MODE: "smtp" })).toThrow("SMTP_HOST")
-    expect(loadConfig({ ...base, EMAIL_DELIVERY_MODE: "smtp", SMTP_HOST: "smtp.example.test", SMTP_PORT: "465", SMTP_SECURE: "true", SMTP_USER: "user", SMTP_PASSWORD: "password", MAIL_FROM_ADDRESS: "no-reply@example.test", MAIL_FROM_NAME: "Visitor" }).emailDelivery).toMatchObject({ mode: "smtp", smtp: { host: "smtp.example.test", port: 465, secure: true } })
+  it("keeps log delivery as the development and test default", () => {
+    expect(loadConfig({ DATABASE_URL: databaseUrl }).emailDelivery).toMatchObject({ mode: "log" })
+    expect(loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "development", EMAIL_DELIVERY_MODE: "log" }).emailDelivery).toMatchObject({ mode: "log" })
+    expect(loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "test", EMAIL_DELIVERY_MODE: "log" }).emailDelivery).toMatchObject({ mode: "log" })
+  })
+
+  it("fails closed before startup when production does not select SMTP", () => {
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production" })).toThrow(ConfigError)
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production" })).toThrow("EMAIL_DELIVERY_MODE=smtp zorunludur")
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", EMAIL_DELIVERY_MODE: "log" })).toThrow("EMAIL_DELIVERY_MODE=smtp zorunludur")
+  })
+
+  it("keeps the existing SMTP required-field validation and accepts complete production SMTP", () => {
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", EMAIL_DELIVERY_MODE: "smtp" })).toThrow("SMTP_HOST")
+    expect(loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", ...smtpConfig }).emailDelivery).toMatchObject({
+      mode: "smtp", smtp: { host: "smtp.example.test", port: 465, secure: true },
+    })
   })
 })
 

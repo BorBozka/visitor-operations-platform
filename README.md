@@ -127,7 +127,8 @@ Gereksinimler: desteklenen bir Node.js sürümü, pnpm ve erişilebilir Microsof
 - `DATABASE_URL`, Prisma SQL Server bağlantısıdır.
 - `SESSION_COOKIE_NAME` ve `SESSION_TTL_HOURS`, server-side session cookie adını ve ömrünü
   belirler. Cookie production'da `Secure` olur.
-- `EMAIL_DELIVERY_MODE=log` e-posta göndermez. `smtp` modu tüm SMTP alanlarını zorunlu kılar.
+- Development/test ortamında `EMAIL_DELIVERY_MODE=log` e-posta göndermez. Production'da
+  `EMAIL_DELIVERY_MODE=smtp` zorunludur ve tüm SMTP alanları sağlanmadıkça server başlamaz.
 - `DEMO_SEED_ENABLED` production'da `false` kalmalıdır.
 
 ## Development ve production komutları
@@ -165,12 +166,13 @@ varsayılanlar cross-site deployment için gevşetilmemiştir.
 
 ## Backend e-posta teslimi
 
-Geliştirme için güvenli varsayılan:
+Geliştirme/test için güvenli varsayılan:
 
     EMAIL_DELIVERY_MODE=log
 
 Bu mod e-posta göndermez; alıcı/konu metadatasını loglar fakat e-posta gövdesini, invitation
-tokenını veya pre-registration URL'sini loglamaz. SMTP için `EMAIL_DELIVERY_MODE=smtp` seçin ve
+tokenını veya pre-registration URL'sini loglamaz. Production'da `EMAIL_DELIVERY_MODE=smtp`
+zorunludur. SMTP için
 `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM_ADDRESS` ve
 `MAIL_FROM_NAME` değerlerinin tamamını environment üzerinden sağlayın. Secret ve gerçek SMTP
 credential'ları commit edilmez.

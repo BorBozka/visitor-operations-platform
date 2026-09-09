@@ -64,6 +64,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     ["MAIL_FROM_ADDRESS", parsed.data.MAIL_FROM_ADDRESS],
     ["MAIL_FROM_NAME", parsed.data.MAIL_FROM_NAME],
   ] as const
+  if (parsed.data.NODE_ENV === "production" && parsed.data.EMAIL_DELIVERY_MODE !== "smtp") {
+    throw new ConfigError("Geçersiz server yapılandırması: production ortamında EMAIL_DELIVERY_MODE=smtp zorunludur.")
+  }
   if (parsed.data.EMAIL_DELIVERY_MODE === "smtp") {
     const missing = smtpFields.filter(([, value]) => value === undefined || value === "").map(([name]) => name)
     if (missing.length > 0) throw new ConfigError(`Geçersiz server yapılandırması: EMAIL_DELIVERY_MODE=smtp için ${missing.join(", ")} zorunludur.`)

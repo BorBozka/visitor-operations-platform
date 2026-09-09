@@ -364,8 +364,9 @@ raises it so its many rapid seeded logins are not throttled.
 
 ## Email delivery configuration
 
-`EMAIL_DELIVERY_MODE=log|smtp` defaults to `log`, which sends nothing and does not log email
-bodies or raw invitation tokens. `smtp` requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
-`SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM_ADDRESS`, and `MAIL_FROM_NAME`; startup fails clearly
-when any required value is absent. The SMTP adapter is isolated behind the backend `EmailSender`
-boundary; no provider-specific logic is present in visitor services.
+Development/test ortamında `EMAIL_DELIVERY_MODE=log|smtp` varsayılan olarak `log`dur; bu mod
+gönderim yapmaz ve e-posta gövdelerini veya raw invitation tokenlarını loglamaz. Production'da
+`EMAIL_DELIVERY_MODE=smtp` zorunludur. `smtp` modu `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
+`SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM_ADDRESS` ve `MAIL_FROM_NAME` değerlerinin tamamını
+zorunlu kılar; herhangi biri eksikse startup açık hata ile durur. SMTP adapterı backend
+`EmailSender` sınırında izoledir; visitor servislerinde sağlayıcıya özgü mantık bulunmaz.
