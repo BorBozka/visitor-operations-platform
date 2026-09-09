@@ -29,9 +29,33 @@ export class VisitorCardConflictError extends Error {
   }
 }
 
+/**
+ * A public invitation token no longer authorizes a write: either no invitation carries the hash,
+ * or the Visit behind it has left `PLANNED` (cancelled / checked in). The service maps both onto
+ * the single public `404 INVITATION_NOT_FOUND` response, which deliberately does not tell the
+ * holder of the link which of the two it is.
+ */
+export class PublicInvitationInactiveError extends Error {
+  constructor() {
+    super("Public invitation is no longer attached to a PLANNED visit.")
+    this.name = "PublicInvitationInactiveError"
+  }
+}
+
 export interface VisitorCardExpectedState {
   status: VisitorCardStatus
   currentVisitId: string | null
+}
+
+/**
+ * Re-reads the invitation by token hash *inside* a write transaction and returns its Visit only
+ * while that Visit is still persisted as `PLANNED`. This — not the service's earlier snapshot —
+ * is the authority every public mutation must gate on.
+ */
+async function findPlannedPublicVisit(tx: Prisma.TransactionClient, tokenHash: string) {
+  const invitation = await tx.invitation.findUnique({ where: { tokenHash }, include: { visit: { select: { id: true, status: true, visitorId: true } } } })
+  if (!invitation || invitation.visit.status !== "PLANNED") throw new PublicInvitationInactiveError()
+  return invitation.visit
 }
 
 function isCheckInWriteConflict(error: unknown) {
@@ -247,8 +271,41 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
   }
   async finishInvitation(visitId: string, succeeded: boolean, now: Date) { await this.prisma.visit.updateMany({ where: { id: visitId, invitationStatus: "SENDING" }, data: succeeded ? { invitationStatus: "SENT", invitationSentAt: now, invitationError: null } : { invitationStatus: "FAILED", invitationError: "Davet teknik bir hata nedeniyle gönderilemedi." } }) }
   async findPublicPreRegistration(tokenHash: string) { const invitation = await this.prisma.invitation.findUnique({ where: { tokenHash }, include: { visit: { include: visitInclude } } }); if (!invitation) return null; const active = await this.prisma.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } }); return { visit: toVisit(invitation.visit), activeRule: active ? toRule(active) : null } }
-  async updatePublicVisitor(tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }) { await this.prisma.$transaction(async (tx) => { const invitation = await tx.invitation.findUnique({ where: { tokenHash }, include: { visit: true } }); if (!invitation) return; await tx.visitor.update({ where: { id: invitation.visit.visitorId }, data: { firstName: input.firstName, lastName: input.lastName, email: input.email, company: input.company, phone: input.phone } }); await tx.visit.update({ where: { id: invitation.visitId }, data: { vehiclePlate: input.vehiclePlate } }) }) }
-  async acceptPublicRule(tokenHash: string, ipAddress?: string) { return this.prisma.$transaction(async (tx) => { const invitation = await tx.invitation.findUnique({ where: { tokenHash }, include: { visit: true } }); const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } }); if (!invitation || !rule) throw new Error("Missing invitation or rule."); const existing = await tx.visitRuleAcceptance.findUnique({ where: { visitId_visitorRuleVersionId: { visitId: invitation.visitId, visitorRuleVersionId: rule.id } } }); const row = existing ?? await tx.visitRuleAcceptance.create({ data: { visitId: invitation.visitId, visitorId: invitation.visit.visitorId, visitorRuleVersionId: rule.id, ruleVersion: rule.version, acceptedAt: new Date(), method: "INVITATION_LINK", contentSnapshot: rule.content, integrityHash: null, ipAddress: ipAddress ?? null } }); return { id: row.id, ruleId: row.visitorRuleVersionId, ruleVersion: row.ruleVersion, acceptedAt: row.acceptedAt.toISOString(), method: parseEnum(ruleAcceptanceMethods, row.method, "rule acceptance method"), contentSnapshot: row.contentSnapshot } }) }
+  /**
+   * Public visitor pre-registration write.
+   *
+   * The service's `getActivePublicInvitation` pre-check reads a snapshot a concurrent cancel /
+   * check-in can invalidate before this write runs, so the authority for "the invitation is still
+   * usable" is this transaction: the invitation is re-read by token hash and the Visit write is a
+   * compare-and-set on the *persisted* `PLANNED` status, leaving no window between the check and
+   * the write. A cancel / check-in that commits first makes the CAS match nothing and the whole
+   * transaction — visitor fields included — rolls back.
+   */
+  async updatePublicVisitor(tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }) {
+    await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+      const visit = await findPlannedPublicVisit(tx, tokenHash)
+      const changed = await tx.visit.updateMany({ where: { id: visit.id, status: "PLANNED" }, data: { vehiclePlate: input.vehiclePlate } })
+      if (changed.count !== 1) throw new PublicInvitationInactiveError()
+      await tx.visitor.update({ where: { id: visit.visitorId }, data: { firstName: input.firstName, lastName: input.lastName, email: input.email, company: input.company, phone: input.phone } })
+    }, { isolationLevel: "Serializable" }))
+  }
+  /**
+   * Public rule acceptance. Same invariant as `updatePublicVisitor`: the persisted Visit status is
+   * re-read inside the transaction, and SERIALIZABLE holds that read locked until commit, so a
+   * cancel / check-in cannot slip in between the revalidation and the acceptance row. A missing
+   * *active rule* stays deliberately distinct from an inactive invitation — the service owns the
+   * `NO_ACTIVE_RULE` contract and must not see this case as a 404.
+   */
+  async acceptPublicRule(tokenHash: string, ipAddress?: string) {
+    return withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+      const visit = await findPlannedPublicVisit(tx, tokenHash)
+      const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } })
+      if (!rule) throw new Error("Missing active rule.")
+      const existing = await tx.visitRuleAcceptance.findUnique({ where: { visitId_visitorRuleVersionId: { visitId: visit.id, visitorRuleVersionId: rule.id } } })
+      const row = existing ?? await tx.visitRuleAcceptance.create({ data: { visitId: visit.id, visitorId: visit.visitorId, visitorRuleVersionId: rule.id, ruleVersion: rule.version, acceptedAt: new Date(), method: "INVITATION_LINK", contentSnapshot: rule.content, integrityHash: null, ipAddress: ipAddress ?? null } })
+      return { id: row.id, ruleId: row.visitorRuleVersionId, ruleVersion: row.ruleVersion, acceptedAt: row.acceptedAt.toISOString(), method: parseEnum(ruleAcceptanceMethods, row.method, "rule acceptance method"), contentSnapshot: row.contentSnapshot }
+    }, { isolationLevel: "Serializable" }))
+  }
   async listRules() { return (await this.prisma.visitorRuleVersion.findMany({ orderBy: { version: "desc" } })).map(toRule) }
   async getActiveRule() { const row = await this.prisma.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } }); return row ? toRule(row) : null }
   async publishRule(content: string, now: Date) { const row = await this.prisma.$transaction(async (tx) => { const latest = await tx.visitorRuleVersion.findFirst({ orderBy: { version: "desc" }, select: { version: true } }); await tx.visitorRuleVersion.updateMany({ where: { active: true }, data: { active: false } }); return tx.visitorRuleVersion.create({ data: { version: (latest?.version ?? 0) + 1, content, publishedAt: now, active: true } }) }, { isolationLevel: "Serializable" }); return toRule(row) }

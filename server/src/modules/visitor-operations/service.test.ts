@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { AccessContext } from "../../lib/authorization.js"
 import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
-import { CheckInConflictError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { CheckInConflictError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
-import type { MeetingDto, MeetingInput, VisitDto, VisitStatus } from "./types.js"
+import type { MeetingDto, MeetingInput, VisitDto, VisitorRuleDto, VisitStatus } from "./types.js"
 
 const now = new Date("2026-09-02T10:00:00.000Z")
 const scope = { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }
@@ -323,5 +323,121 @@ describe("Meeting shared planning invariant", () => {
 
     await expect(service.updateMeeting("meeting-1", editInput, OWNER)).rejects.toMatchObject({ statusCode: 409, code: "MEETING_VISITS_NOT_PLANNED" })
     expect(meeting).toMatchObject({ plannedStart: "2026-09-03T09:00:00.000Z", plannedEnd: "2026-09-03T10:00:00.000Z" })
+  })
+})
+
+/**
+ * The public pre-registration surface. The service's own `getActivePublicInvitation` pre-check
+ * runs on a snapshot, so this fake repository behaves like the real one: every public write
+ * re-validates the *persisted* visit status inside its transaction and rejects with
+ * `PublicInvitationInactiveError` when the visit has left `PLANNED`. `beforeWrite` lets a test
+ * commit a cancel / check-in in exactly the window the old code wrote through.
+ */
+function publicInvitationFixture(options: { activeRule?: VisitorRuleDto | null } = {}) {
+  const activeRule = options.activeRule === undefined ? { id: "rule-1", version: 2, content: "Ziyaretçi kuralı", publishedAt: now.toISOString(), active: true } : options.activeRule
+  const state = { status: "PLANNED" as VisitStatus, visitor: visit().visitor, vehiclePlate: undefined as string | undefined, acceptances: 0 }
+  const tokenHashes: string[] = []
+  let beforeNextWrite: (() => void) | undefined
+  let writeFailure: Error | undefined
+  const revalidate = () => {
+    beforeNextWrite?.()
+    beforeNextWrite = undefined
+    if (writeFailure) throw writeFailure
+    if (state.status !== "PLANNED") throw new PublicInvitationInactiveError()
+  }
+  const repository = unusedRepository({
+    findPublicPreRegistration: async (tokenHash: string) => {
+      tokenHashes.push(tokenHash)
+      if (tokenHash !== hashToken("public-token")) return null
+      return { visit: visit({ status: state.status, visitor: state.visitor, vehiclePlate: state.vehiclePlate }), activeRule }
+    },
+    updatePublicVisitor: async (tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }) => {
+      tokenHashes.push(tokenHash)
+      revalidate()
+      state.visitor = { ...state.visitor, firstName: input.firstName, lastName: input.lastName, email: input.email, company: input.company, phone: input.phone }
+      state.vehiclePlate = input.vehiclePlate
+    },
+    acceptPublicRule: async (tokenHash: string) => {
+      tokenHashes.push(tokenHash)
+      revalidate()
+      state.acceptances += 1
+      return { id: "acceptance-1", ruleId: activeRule!.id, ruleVersion: activeRule!.version, acceptedAt: now.toISOString(), method: "INVITATION_LINK" as const, contentSnapshot: activeRule!.content }
+    },
+  })
+  const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+  return {
+    service, state,
+    tokenHashes: () => tokenHashes,
+    beforeWrite: (operation: () => void) => { beforeNextWrite = operation },
+    failWriteWith: (error: Error) => { writeFailure = error },
+  }
+}
+
+const publicInput = { firstName: "Ada Güncel", lastName: "Yılmaz", company: "Acme A.Ş.", email: "ada.guncel@example.test", phone: "5550000000", vehiclePlate: "16 ABC 123" }
+const invitationNotFoundBody = { statusCode: 404, code: "INVITATION_NOT_FOUND", message: "Davet bağlantısı geçersiz veya süresi dolmuş." }
+
+describe("VisitorOperationsService public invitation mutations", () => {
+  it("updates the visitor and accepts the rule for a PLANNED visit, sending only the token hash", async () => {
+    const fixture = publicInvitationFixture()
+
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).resolves.toMatchObject({
+      visitor: { firstName: "Ada Güncel", company: "Acme A.Ş.", phone: "5550000000" },
+      visit: { vehiclePlate: "16 ABC 123" },
+    })
+    await expect(fixture.service.acceptPublicRule("public-token", "203.0.113.7")).resolves.toMatchObject({ ruleId: "rule-1", ruleVersion: 2 })
+
+    expect(fixture.state.acceptances).toBe(1)
+    expect(fixture.tokenHashes().every((hash) => hash === hashToken("public-token"))).toBe(true)
+    expect(fixture.tokenHashes()).not.toContain("public-token")
+  })
+
+  it.each(["CANCELLED", "CHECKED_IN"] as const)("maps a visit that turned %s before the write onto the public 404", async (status) => {
+    const fixture = publicInvitationFixture()
+    // The service pre-check passes on the PLANNED snapshot; the repository transaction is the one
+    // that sees the committed cancel / check-in.
+    fixture.beforeWrite(() => { fixture.state.status = status })
+
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).rejects.toMatchObject(invitationNotFoundBody)
+
+    expect(fixture.state.visitor).toMatchObject({ firstName: "Ada", company: "Acme" })
+    expect(fixture.state.vehiclePlate).toBeUndefined()
+
+    fixture.state.status = "PLANNED"
+    fixture.beforeWrite(() => { fixture.state.status = status })
+    await expect(fixture.service.acceptPublicRule("public-token")).rejects.toMatchObject(invitationNotFoundBody)
+    expect(fixture.state.acceptances).toBe(0)
+  })
+
+  it.each(["CANCELLED", "CHECKED_IN"] as const)("refuses a public mutation on an already %s visit", async (status) => {
+    const fixture = publicInvitationFixture()
+    fixture.state.status = status
+
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.acceptPublicRule("public-token")).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.getPublicPreRegistration("public-token")).rejects.toMatchObject(invitationNotFoundBody)
+    expect(fixture.state.acceptances).toBe(0)
+  })
+
+  it("keeps hiding an unknown token behind the same 404", async () => {
+    const fixture = publicInvitationFixture()
+
+    await expect(fixture.service.getPublicPreRegistration("wrong-token")).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.updatePublicPreRegistration("wrong-token", publicInput)).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.acceptPublicRule("wrong-token")).rejects.toMatchObject(invitationNotFoundBody)
+  })
+
+  it("does not disguise an unexpected repository failure as an expired invitation", async () => {
+    const fixture = publicInvitationFixture()
+    fixture.failWriteWith(new Error("connection reset by peer"))
+
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).rejects.toThrow("connection reset by peer")
+    await expect(fixture.service.acceptPublicRule("public-token")).rejects.toThrow("connection reset by peer")
+  })
+
+  it("still reports a missing active rule as NO_ACTIVE_RULE, not as an expired invitation", async () => {
+    const fixture = publicInvitationFixture({ activeRule: null })
+
+    await expect(fixture.service.acceptPublicRule("public-token")).rejects.toMatchObject({ statusCode: 409, code: "NO_ACTIVE_RULE" })
+    expect(fixture.state.acceptances).toBe(0)
   })
 })

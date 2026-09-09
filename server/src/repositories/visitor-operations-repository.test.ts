@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client"
 import { describe, expect, it, vi } from "vitest"
 
 import type { MeetingInput } from "../modules/visitor-operations/types.js"
-import { CheckInConflictError, PrismaVisitorOperationsRepository, VisitorCardConflictError } from "./visitor-operations-repository.js"
+import { CheckInConflictError, PrismaVisitorOperationsRepository, PublicInvitationInactiveError, VisitorCardConflictError } from "./visitor-operations-repository.js"
 
 const sentAt = new Date("2026-09-02T08:00:00.000Z")
 const updatedAt = new Date("2026-09-02T09:00:00.000Z")
@@ -489,5 +489,166 @@ describe("PrismaVisitorOperationsRepository Security card lifecycle", () => {
     await expect(repository.checkIn("visit-planned", { visitorCardId: "card-1" }, updatedAt)).rejects.toBeInstanceOf(CheckInConflictError)
     expect(fixture.visit).toMatchObject({ status: "PLANNED", visitorCardId: null })
     expect(fixture.card).toMatchObject({ status: "DISABLED", currentVisitId: null })
+  })
+})
+
+interface FixtureRule { id: string; version: number; content: string }
+interface FixtureAcceptance { id: string; visitId: string; visitorId: string; visitorRuleVersionId: string; ruleVersion: number; acceptedAt: Date; method: string; contentSnapshot: string; ipAddress: string | null }
+
+/**
+ * Public pre-registration fixture. `$transaction` snapshots and restores the mutable rows so a
+ * throw inside it behaves like a real rollback — which is what the TOCTOU guard relies on.
+ */
+function createPublicInvitationFixture(options: { visitStatus?: string; activeRule?: FixtureRule | null } = {}) {
+  const visitor = { id: "visitor-1", firstName: "Ada", lastName: "Yılmaz", email: "ada@example.test" as string | null, company: "Acme", phone: null as string | null }
+  const visit = { id: "visit-1", visitorId: visitor.id, status: options.visitStatus ?? "PLANNED", vehiclePlate: null as string | null }
+  const rule = options.activeRule === undefined ? { id: "rule-1", version: 3, content: "Ziyaretçi kuralı" } : options.activeRule
+  let acceptances: FixtureAcceptance[] = []
+  let beforeNextVisitWrite: (() => void) | undefined
+  let failVisitorUpdate = false
+  let failAcceptanceCreate = false
+
+  const tx = {
+    invitation: { findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => where.tokenHash === "token-hash" ? { visitId: visit.id, tokenHash: where.tokenHash, visit: { id: visit.id, status: visit.status, visitorId: visit.visitorId } } : null) },
+    visit: {
+      updateMany: vi.fn(async ({ where, data }: { where: { id: string; status: string }; data: { vehiclePlate?: string } }) => {
+        beforeNextVisitWrite?.()
+        beforeNextVisitWrite = undefined
+        if (visit.id !== where.id || visit.status !== where.status) return { count: 0 }
+        Object.assign(visit, data)
+        return { count: 1 }
+      }),
+    },
+    visitor: {
+      update: vi.fn(async ({ data }: { data: Partial<typeof visitor> }) => {
+        if (failVisitorUpdate) throw new Error("visitor write failed")
+        return Object.assign(visitor, data)
+      }),
+    },
+    visitorRuleVersion: { findFirst: vi.fn(async () => rule) },
+    visitRuleAcceptance: {
+      findUnique: vi.fn(async ({ where }: { where: { visitId_visitorRuleVersionId: { visitId: string; visitorRuleVersionId: string } } }) => acceptances.find((item) => item.visitId === where.visitId_visitorRuleVersionId.visitId && item.visitorRuleVersionId === where.visitId_visitorRuleVersionId.visitorRuleVersionId) ?? null),
+      create: vi.fn(async ({ data }: { data: Omit<FixtureAcceptance, "id"> }) => {
+        const row = { id: `acceptance-${acceptances.length + 1}`, ...data }
+        acceptances.push(row)
+        if (failAcceptanceCreate) throw new Error("acceptance write failed")
+        return row
+      }),
+    },
+  }
+  const prisma = {
+    $transaction: vi.fn(async (operation: (client: typeof tx) => Promise<unknown>) => {
+      // Only this transaction's own writes roll back: `status` models a *foreign* committed
+      // cancel / check-in, which must survive the rollback exactly as it does in the database.
+      const plateSnapshot = visit.vehiclePlate, visitorSnapshot = { ...visitor }, acceptanceSnapshot = [...acceptances]
+      try {
+        return await operation(tx)
+      } catch (error) {
+        visit.vehiclePlate = plateSnapshot
+        Object.assign(visitor, visitorSnapshot)
+        acceptances = acceptanceSnapshot
+        throw error
+      }
+    }),
+  } as unknown as PrismaClient
+
+  return {
+    prisma, tx, visit, visitor,
+    acceptances: () => acceptances,
+    beforeVisitWrite: (operation: () => void) => { beforeNextVisitWrite = operation },
+    failVisitorUpdate: () => { failVisitorUpdate = true },
+    failAcceptanceCreate: () => { failAcceptanceCreate = true },
+  }
+}
+
+const publicVisitorInput = { firstName: "Ada Güncel", lastName: "Yılmaz", company: "Acme A.Ş.", email: "ada.guncel@example.test", phone: "5550000000", vehiclePlate: "16ABC123" }
+
+describe("PrismaVisitorOperationsRepository public invitation revalidation", () => {
+  it("updates the visitor and plate for a still-PLANNED visit", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await repository.updatePublicVisitor("token-hash", publicVisitorInput)
+
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada Güncel", lastName: "Yılmaz", company: "Acme A.Ş.", email: "ada.guncel@example.test", phone: "5550000000" })
+    expect(fixture.visit.vehiclePlate).toBe("16ABC123")
+    expect(fixture.tx.visit.updateMany).toHaveBeenCalledWith({ where: { id: "visit-1", status: "PLANNED" }, data: { vehiclePlate: "16ABC123" } })
+  })
+
+  it("accepts the active rule for a still-PLANNED visit and stays idempotent", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    const first = await repository.acceptPublicRule("token-hash", "203.0.113.7")
+    const second = await repository.acceptPublicRule("token-hash", "203.0.113.7")
+
+    expect(first).toMatchObject({ ruleId: "rule-1", ruleVersion: 3, method: "INVITATION_LINK", contentSnapshot: "Ziyaretçi kuralı" })
+    expect(second.id).toBe(first.id)
+    expect(fixture.acceptances()).toHaveLength(1)
+  })
+
+  it.each(["CANCELLED", "CHECKED_IN"])("writes nothing when the persisted visit is already %s", async (status) => {
+    const fixture = createPublicInvitationFixture({ visitStatus: status })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+    await expect(repository.acceptPublicRule("token-hash")).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", email: "ada@example.test", phone: null })
+    expect(fixture.visit.vehiclePlate).toBeNull()
+    expect(fixture.tx.visit.updateMany).not.toHaveBeenCalled()
+    expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
+    expect(fixture.acceptances()).toEqual([])
+  })
+
+  it("rejects an unknown token hash as an inactive invitation", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.updatePublicVisitor("other-token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+    await expect(repository.acceptPublicRule("other-token-hash")).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+    expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
+    expect(fixture.acceptances()).toEqual([])
+  })
+
+  it("cannot commit a public visitor write once a cancel lands between the in-transaction read and the write", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    fixture.beforeVisitWrite(() => { fixture.visit.status = "CANCELLED" })
+
+    await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+
+    expect(fixture.visit).toMatchObject({ status: "CANCELLED", vehiclePlate: null })
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada", company: "Acme", phone: null })
+    expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
+  })
+
+  it("rolls the plate back when the visitor half of the public write fails", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    fixture.failVisitorUpdate()
+
+    await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toThrow("visitor write failed")
+
+    expect(fixture.visit.vehiclePlate).toBeNull()
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada", company: "Acme", phone: null })
+  })
+
+  it("leaves no rule acceptance behind when the acceptance write fails", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    fixture.failAcceptanceCreate()
+
+    await expect(repository.acceptPublicRule("token-hash")).rejects.toThrow("acceptance write failed")
+
+    expect(fixture.acceptances()).toEqual([])
+  })
+
+  it("keeps a missing active rule distinct from an inactive invitation", async () => {
+    const fixture = createPublicInvitationFixture({ activeRule: null })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.acceptPublicRule("token-hash")).rejects.not.toBeInstanceOf(PublicInvitationInactiveError)
+    expect(fixture.acceptances()).toEqual([])
   })
 })
