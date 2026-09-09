@@ -11,13 +11,14 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns"
-import { CalendarPlus, ChevronLeft, ChevronRight, Info } from "lucide-react"
+import { CalendarPlus, ChevronLeft, ChevronRight, Info, Package } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
 import { createPortal } from "react-dom"
 
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { visitStatusLabels, type Visit } from "@/domain/visits"
+import type { GoodsMovement } from "@/domain/goods-movements"
 import { getDayVisitContentLineCount, getDayVisitMinimumHeight, getDayVisitPlacement, getTimelineOffset, getTimelineRange, getTimelineVisitEndMinutes, getTimelineVisitStartMinutes, type TimelineRange } from "@/features/visits/timeline-range"
 import { getMonthVisibleVisitCount } from "@/features/visits/month-visit-capacity"
 import { getTimelineTooltipPosition, type TimelineTooltipPosition } from "@/features/visits/timeline-tooltip"
@@ -31,12 +32,13 @@ export type TimelineView = "day" | "week" | "month"
 
 interface Props {
   visits: Visit[]
+  plannedGoodsDeliveries?: GoodsMovement[]
   view: TimelineView
   selectedDate: Date
   onViewChange(view: TimelineView): void
   onSelectedDateChange(date: Date): void
   onVisitOpen(visit: Visit): void
-  onNewVisit(): void
+  onNewRecord(): void
   /** Compress month rows so the whole month fits without vertical scrolling. */
   fitMonthToHeight?: boolean
 }
@@ -47,7 +49,7 @@ const viewLabels: Record<TimelineView, string> = {
   month: "Ay",
 }
 
-export function VisitTimeline({ visits, view, selectedDate, onViewChange, onSelectedDateChange, onVisitOpen, onNewVisit, fitMonthToHeight = false }: Props) {
+export function VisitTimeline({ visits, plannedGoodsDeliveries = [], view, selectedDate, onViewChange, onSelectedDateChange, onVisitOpen, onNewRecord, fitMonthToHeight = false }: Props) {
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -67,6 +69,12 @@ export function VisitTimeline({ visits, view, selectedDate, onViewChange, onSele
     return isSameMonth(date, selectedDate)
   })
   const countedVisits = getNonCancelledUpcomingVisits(visibleVisits)
+  const visibleDeliveries = plannedGoodsDeliveries.filter((delivery) => {
+    const date = new Date(`${delivery.plannedDate}T12:00:00`)
+    if (view === "day") return isSameDay(date, selectedDate)
+    if (view === "week") return isWithinInterval(date, { start: startOfWeek(selectedDate, { weekStartsOn: 1 }), end: endOfWeek(selectedDate, { weekStartsOn: 1 }) })
+    return isSameMonth(date, selectedDate)
+  })
 
   const move = (direction: -1 | 1) => {
     const amount = direction
@@ -92,10 +100,11 @@ export function VisitTimeline({ visits, view, selectedDate, onViewChange, onSele
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
             {countedVisits.length} ziyaret
           </span>
+          {visibleDeliveries.length > 0 && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">{visibleDeliveries.length} mal</span>}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button size="sm" onClick={onNewVisit}><CalendarPlus />Yeni Ziyaret</Button>
+          <Button size="sm" onClick={onNewRecord}><CalendarPlus />Yeni kayıt</Button>
           <div className="inline-flex rounded-md border bg-slate-50 p-0.5" aria-label="Takvim görünümü">
             {(["day", "week", "month"] as const).map((item) => (
               <button
@@ -148,8 +157,9 @@ export function VisitTimeline({ visits, view, selectedDate, onViewChange, onSele
         </div>
       </div>
 
+      {view !== "month" && <GoodsDeliveryStrip deliveries={visibleDeliveries} showDate={view === "week"} />}
       {view === "month" ? (
-        <MonthTimeline visits={visits} selectedDate={selectedDate} onVisitOpen={onVisitOpen} fitToHeight={fitMonthToHeight} />
+        <MonthTimeline visits={visits} deliveries={plannedGoodsDeliveries} selectedDate={selectedDate} onVisitOpen={onVisitOpen} fitToHeight={fitMonthToHeight} />
       ) : (
         <LaneTimeline
           fitToHeight={fitMonthToHeight}
@@ -162,6 +172,23 @@ export function VisitTimeline({ visits, view, selectedDate, onViewChange, onSele
         />
       )}
     </section>
+  )
+}
+
+function GoodsDeliveryStrip({ deliveries, showDate }: { deliveries: GoodsMovement[]; showDate: boolean }) {
+  if (deliveries.length === 0) return null
+  return (
+    <div className="shrink-0 border-b bg-blue-50/40 px-3 py-2" aria-label="Gün içinde beklenen mal teslimatları">
+      <div className="flex gap-2 overflow-x-auto scrollbar-thin">
+        {deliveries.map((delivery) => (
+          <div key={delivery.id} className="min-w-48 max-w-72 rounded border border-l-[3px] border-blue-200 border-l-blue-500 bg-white px-2 py-1.5 text-xs">
+            <p className="flex items-center gap-1.5 font-semibold text-slate-900"><Package className="size-3.5 text-blue-700" /><span className="text-blue-700">Mal</span><span className="truncate">· {delivery.counterpartyName}</span></p>
+            <p className="mt-0.5 truncate text-slate-600">{delivery.goodsDescription}</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">{showDate ? `${formatTr(new Date(`${delivery.plannedDate}T12:00:00`), "d MMM")} · ` : ""}Gün içinde</p>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -569,7 +596,7 @@ function VisitTooltipContent({ visit }: { visit: Visit }) {
   )
 }
 
-function MonthTimeline({ visits, selectedDate, onVisitOpen, fitToHeight }: { visits: Visit[]; selectedDate: Date; onVisitOpen(visit: Visit): void; fitToHeight: boolean }) {
+function MonthTimeline({ visits, deliveries, selectedDate, onVisitOpen, fitToHeight }: { visits: Visit[]; deliveries: GoodsMovement[]; selectedDate: Date; onVisitOpen(visit: Visit): void; fitToHeight: boolean }) {
   const interval = {
     start: startOfWeek(startOfMonth(selectedDate), { weekStartsOn: 1 }),
     end: endOfWeek(endOfMonth(selectedDate), { weekStartsOn: 1 }),
@@ -588,8 +615,9 @@ function MonthTimeline({ visits, selectedDate, onVisitOpen, fitToHeight }: { vis
         <div className={cn("grid flex-1 grid-cols-7", fitToHeight && "xl:min-h-0")} style={{ gridTemplateRows: `repeat(${weekCount}, minmax(0, 1fr))` }}>
           {days.map((day) => {
             const dayVisits = visits.filter((visit) => isSameDay(new Date(visit.plannedStart), day))
+            const dayDeliveries = deliveries.filter((delivery) => isSameDay(new Date(`${delivery.plannedDate}T12:00:00`), day))
             return (
-              <MonthDayCell key={day.toISOString()} day={day} visits={dayVisits} selectedDate={selectedDate} onVisitOpen={onVisitOpen} />
+              <MonthDayCell key={day.toISOString()} day={day} visits={dayVisits} deliveries={dayDeliveries} selectedDate={selectedDate} onVisitOpen={onVisitOpen} />
             )
           })}
         </div>
@@ -600,7 +628,7 @@ function MonthTimeline({ visits, selectedDate, onVisitOpen, fitToHeight }: { vis
 
 const monthVisitBlockClass = "group relative block w-full rounded border border-l-[3px] px-1.5 py-0.5 text-left text-[10px]"
 
-function MonthDayCell({ day, visits, selectedDate, onVisitOpen }: { day: Date; visits: Visit[]; selectedDate: Date; onVisitOpen(visit: Visit): void }) {
+function MonthDayCell({ day, visits, deliveries, selectedDate, onVisitOpen }: { day: Date; visits: Visit[]; deliveries: GoodsMovement[]; selectedDate: Date; onVisitOpen(visit: Visit): void }) {
   const cellRef = useRef<HTMLDivElement | null>(null)
   const dayNumberRef = useRef<HTMLDivElement | null>(null)
   const visitMeasureRef = useRef<HTMLDivElement | null>(null)
@@ -655,6 +683,11 @@ function MonthDayCell({ day, visits, selectedDate, onVisitOpen }: { day: Date; v
         {formatTr(day, "d")}
       </div>
       <div className="space-y-1">
+        {deliveries.map((delivery) => (
+          <div key={delivery.id} className="rounded border border-l-[3px] border-blue-200 border-l-blue-500 bg-white px-1.5 py-0.5 text-[10px]" title={`${delivery.counterpartyName} · ${delivery.goodsDescription} · Gün içinde`}>
+            <p className="flex items-center gap-1 truncate font-semibold"><Package className="size-3 shrink-0 text-blue-700" /><span className="text-blue-700">Mal</span><span className="truncate">· {delivery.counterpartyName}</span></p>
+          </div>
+        ))}
         {visibleVisits.map((visit) => (
           <MonthVisitBlock key={visit.id} visit={visit} onOpen={onVisitOpen} />
         ))}

@@ -11,6 +11,8 @@ export interface CompleteGoodsMovementInput {
 export interface GoodsMovementService {
   /** Manager/Admin planning list: every goods movement in the caller's authorization scope. */
   listGoodsMovements(): Promise<GoodsMovement[]>
+  /** Calendar list: only records created by the authenticated user. */
+  listMyGoodsMovements(): Promise<GoodsMovement[]>
   /**
    * Security desk list: today's PLANNED movements inside the Security user's scope, backed by a
    * distinct scoped endpoint.

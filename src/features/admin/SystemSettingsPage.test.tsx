@@ -34,4 +34,8 @@ describe("System settings workspace patterns", () => {
     expect(source).toContain("item.assignedVisitorName &&")
     expect(source).not.toContain("Kullanım bilgisi</th>")
   })
+
+  it("draws a bottom border below the final visit type and visitor card rows", () => {
+    expect(source.match(/<tbody className="divide-y border-b">/g)).toHaveLength(2)
+  })
 })

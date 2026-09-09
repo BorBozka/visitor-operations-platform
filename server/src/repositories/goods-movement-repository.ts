@@ -14,6 +14,7 @@ export interface PersistGoodsMovementInput {
   goodsDescription: string
   referenceNumber?: string
   note?: string
+  createdByUserId?: string
 }
 
 export interface CompleteGoodsMovementPersistInput {
@@ -24,6 +25,7 @@ export interface CompleteGoodsMovementPersistInput {
 
 export interface GoodsMovementRepository {
   list(): Promise<GoodsMovementDto[]>
+  listByCreatorUserId(userId: string): Promise<GoodsMovementDto[]>
   find(id: string): Promise<GoodsMovementDto | null>
   companyAndFacilityMatch(companyId: string, facilityId: string): Promise<boolean>
   create(input: PersistGoodsMovementInput): Promise<GoodsMovementDto>
@@ -91,6 +93,7 @@ function toData(input: PersistGoodsMovementInput) {
     goodsDescription: input.goodsDescription,
     referenceNumber: input.referenceNumber ?? null,
     note: input.note ?? null,
+    createdByUserId: input.createdByUserId,
   }
 }
 
@@ -99,6 +102,15 @@ export class PrismaGoodsMovementRepository implements GoodsMovementRepository {
 
   async list() {
     const rows = await this.prisma.goodsMovement.findMany({ include, orderBy: [{ plannedDate: "desc" }, { plannedTime: "desc" }, { createdAt: "desc" }] })
+    return rows.map(toGoodsMovementDto)
+  }
+
+  async listByCreatorUserId(userId: string) {
+    const rows = await this.prisma.goodsMovement.findMany({
+      where: { createdByUserId: userId },
+      include,
+      orderBy: [{ plannedDate: "asc" }, { plannedTime: "asc" }, { createdAt: "asc" }],
+    })
     return rows.map(toGoodsMovementDto)
   }
 

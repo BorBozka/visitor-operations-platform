@@ -12,6 +12,10 @@ export class HttpGoodsMovementService implements GoodsMovementService {
     return apiClient.get<GoodsMovement[]>("/goods-movements")
   }
 
+  listMyGoodsMovements(): Promise<GoodsMovement[]> {
+    return apiClient.get<GoodsMovement[]>("/goods-movements/mine")
+  }
+
   listSecurityGoodsMovements(): Promise<GoodsMovement[]> {
     return apiClient.get<GoodsMovement[]>("/security/goods-movements")
   }

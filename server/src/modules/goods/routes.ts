@@ -33,11 +33,14 @@ function parsed<T>(result: z.SafeParseReturnType<unknown, T>): T {
 
 export async function registerGoodsMovementRoutes(app: FastifyInstance, dependencies: { service: GoodsMovementService; guards: AuthGuards }) {
   const planningGuard = dependencies.guards.requireRole("MANAGER", "ADMIN")
+  const createGuard = dependencies.guards.requireRole("EMPLOYEE", "MANAGER", "ADMIN")
   const securityGuard = dependencies.guards.requireRole("SECURITY")
   const service = dependencies.service
 
   app.get("/api/goods-movements", { preHandler: planningGuard }, async (request) => service.list(toAccessContext(request.currentUser!)))
-  app.post("/api/goods-movements", { preHandler: planningGuard }, async (request, reply) =>
+  app.get("/api/goods-movements/mine", { preHandler: createGuard }, async (request) =>
+    service.listOwn(toAccessContext(request.currentUser!)))
+  app.post("/api/goods-movements", { preHandler: createGuard }, async (request, reply) =>
     reply.status(201).send(await service.create(parsed(movementBody.safeParse(request.body)), toAccessContext(request.currentUser!))))
   app.patch("/api/goods-movements/:id", { preHandler: planningGuard }, async (request) =>
     service.update(parsed(idParams.safeParse(request.params)).id, parsed(movementBody.safeParse(request.body)), toAccessContext(request.currentUser!)))

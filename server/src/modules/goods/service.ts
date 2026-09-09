@@ -30,11 +30,20 @@ export class GoodsMovementService {
     return movements.filter((movement) => matchesScopeFilter(filter, movement))
   }
 
-  async create(input: GoodsMovementInput, ctx?: AccessContext) {
-    if (ctx && !scopeAllows(ctx, { companyId: input.companyId, facilityId: input.facilityId })) {
+  async listOwn(ctx: AccessContext) {
+    const movements = await this.repository.listByCreatorUserId(ctx.userId)
+    const filter = resolveScopeFilter(ctx, {})
+    return movements.filter((movement) => matchesScopeFilter(filter, movement))
+  }
+
+  async create(input: GoodsMovementInput, ctx: AccessContext) {
+    if (!scopeAllows(ctx, { companyId: input.companyId, facilityId: input.facilityId })) {
       throw new ApiError(403, "OUT_OF_SCOPE", "Bu şirket/tesis yetki kapsamınız dışında.")
     }
-    return this.repository.create(await this.validate(input))
+    if (ctx.role === "EMPLOYEE" && input.direction !== "INBOUND") {
+      throw new ApiError(403, "FORBIDDEN", "Çalışanlar yalnızca gelecek mal teslimatı oluşturabilir.")
+    }
+    return this.repository.create({ ...await this.validate(input), createdByUserId: ctx.userId })
   }
 
   async update(id: string, input: GoodsMovementInput, ctx?: AccessContext) {
@@ -112,7 +121,7 @@ export class GoodsMovementService {
     return scope
   }
 
-  private async validate(input: GoodsMovementInput): Promise<PersistGoodsMovementInput> {
+  private async validate(input: GoodsMovementInput): Promise<Omit<PersistGoodsMovementInput, "createdByUserId">> {
     const counterpartyName = input.counterpartyName?.trim()
     const goodsDescription = input.goodsDescription?.trim()
     if (!counterpartyName || !goodsDescription) {

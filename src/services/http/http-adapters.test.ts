@@ -215,6 +215,12 @@ describe("catalog / goods / transport adapters", () => {
     expect(last().url).toBe(`${BASE}/security/goods-movements`)
   })
 
+  it("calendar goods list uses the authenticated ownership endpoint", async () => {
+    responder = () => respondJson(200, [])
+    await new HttpGoodsMovementService().listMyGoodsMovements()
+    expect(last().url).toBe(`${BASE}/goods-movements/mine`)
+  })
+
   it("transport availability POSTs the planning window", async () => {
     responder = () => respondJson(200, { vehicles: [], drivers: [] })
     await new HttpTransportAssignmentService().getAvailability({ companyId: "c1", facilityId: "f1", plannedStart: "2026-09-02T09:00:00.000Z", plannedEnd: "2026-09-02T10:00:00.000Z" })

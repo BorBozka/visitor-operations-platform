@@ -116,6 +116,7 @@ model User {
   employeeProfile    Employee?           @relation("UserEmployeeProfile")
   cancelledVisits    Visit[]              @relation("VisitCancelledBy")
   hostCorrections    HostCorrectionAudit[] @relation("HostCorrectedBy")
+  createdGoodsMovements GoodsMovement[]     @relation("GoodsMovementCreator")
 
   @@index([active, role])
 }
@@ -473,13 +474,16 @@ model GoodsMovement {
   actualAt         DateTime?              @db.DateTime2
   actualPlate      String?                @db.VarChar(32)
   actualDriverName String?                @db.NVarChar(200)
+  createdByUserId  String?                @db.VarChar(36)
   createdAt        DateTime               @default(now()) @db.DateTime2
   updatedAt        DateTime               @updatedAt @db.DateTime2
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  facility Facility @relation(fields: [facilityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  facility      Facility @relation(fields: [facilityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser User?    @relation("GoodsMovementCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([facilityId, plannedDate, status])
+  @@index([createdByUserId, plannedDate])
 }
 
 model Session {

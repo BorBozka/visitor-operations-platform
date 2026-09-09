@@ -31,6 +31,7 @@ const persistInput = {
   plannedDate: "2026-09-02",
   plannedTime: "09:30",
   goodsDescription: "Palet",
+  createdByUserId: "user-1",
 }
 
 describe("PrismaGoodsMovementRepository", () => {

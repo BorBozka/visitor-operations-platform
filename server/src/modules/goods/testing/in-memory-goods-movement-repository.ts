@@ -7,6 +7,7 @@ import type {
 import type { GoodsMovementDirection, GoodsMovementDto, GoodsMovementStatus } from "../types.js"
 
 const clone = <T>(value: T): T => structuredClone(value)
+type StoredGoodsMovement = GoodsMovementDto & { createdByUserId?: string }
 
 export interface InMemoryFacilityScope {
   companyId: string
@@ -16,7 +17,7 @@ export interface InMemoryFacilityScope {
 }
 
 export class InMemoryGoodsMovementRepository implements GoodsMovementRepository {
-  private movements: GoodsMovementDto[]
+  private movements: StoredGoodsMovement[]
   private sequence = 0
 
   constructor(
@@ -29,6 +30,10 @@ export class InMemoryGoodsMovementRepository implements GoodsMovementRepository 
 
   async list() {
     return clone(this.movements)
+  }
+
+  async listByCreatorUserId(userId: string) {
+    return clone(this.movements.filter((movement) => movement.createdByUserId === userId))
   }
 
   async find(id: string) {
@@ -80,7 +85,7 @@ export class InMemoryGoodsMovementRepository implements GoodsMovementRepository 
     return this.userScopes[userId] ?? null
   }
 
-  private toRecord(input: PersistGoodsMovementInput, id: string, status: GoodsMovementStatus, createdAt: string): GoodsMovementDto {
+  private toRecord(input: PersistGoodsMovementInput, id: string, status: GoodsMovementStatus, createdAt: string): StoredGoodsMovement {
     const scope = this.facilityScopes.find((item) => item.companyId === input.companyId && item.facilityId === input.facilityId)
     return {
       id,
@@ -95,6 +100,7 @@ export class InMemoryGoodsMovementRepository implements GoodsMovementRepository 
       goodsDescription: input.goodsDescription,
       referenceNumber: input.referenceNumber,
       note: input.note,
+      createdByUserId: input.createdByUserId,
       status,
       createdAt,
     }
