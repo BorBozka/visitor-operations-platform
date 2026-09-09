@@ -4,7 +4,7 @@ import { isScopeWithin } from "../../lib/scope.js"
 import type { AccessContext } from "../../lib/authorization.js"
 import { hashPassword } from "../../auth/password.js"
 import type { AuthRepository } from "../../repositories/auth-repository.js"
-import { EmployeeProvisioningScopeError, type AdminRepository, type PersistedAdminUserInput } from "../../repositories/admin-repository.js"
+import { EmployeeProvisioningScopeError, LastActiveAdminError, type AdminRepository, type PersistedAdminUserInput } from "../../repositories/admin-repository.js"
 import { roleRequiresEmployeeProfile, type AdminUser, type AuthorizationScope, type CreateAdminUserInput, type UpdateAdminUserInput } from "./types.js"
 
 function uniqueIds(values: string[]) { return [...new Set(values)] }
@@ -24,8 +24,9 @@ const outOfScopeError = () => new ApiError(403, "OUT_OF_SCOPE", "Kendi yetki kap
  *   grants and self-escalation. Existence of the referenced ids is checked as well, but it is
  *   never sufficient on its own.
  *
- * `countActiveAdmins` stays deliberately global: "at least one active Admin must remain" is a
- * system-integrity invariant, not a per-tenant one.
+ * "At least one active Admin must remain" is deliberately global — a system-integrity invariant,
+ * not a per-tenant one — and it is *not* decided here: the repository enforces it inside the same
+ * transaction as the write, because a count read before the write cannot see a concurrent one.
  */
 export class AdminService {
   constructor(
@@ -55,14 +56,20 @@ export class AdminService {
     if (existing.authenticationSource === "ACTIVE_DIRECTORY" && (input.fullName !== undefined || input.username !== undefined || input.email !== undefined)) throw new ApiError(409, "IDENTITY_MANAGED_EXTERNALLY", "Active Directory kullanıcılarının kimlik alanları düzenlenemez.")
     if (id === actingUserId && existing.active && !next.active) throw new ApiError(409, "SELF_DEACTIVATION", "Kendi hesabınızı pasif hale getiremezsiniz.")
     if (id === actingUserId && existing.role === "ADMIN" && next.role !== "ADMIN") throw new ApiError(409, "SELF_ADMIN_DEMOTION", "Kendi Admin rolünüzü kaldıramazsınız.")
-    if (existing.role === "ADMIN" && existing.active && (next.role !== "ADMIN" || !next.active) && await this.repository.countActiveAdmins(id) === 0) throw new ApiError(409, "LAST_ACTIVE_ADMIN", "Sistemde en az bir aktif Admin bulunmalıdır.")
     const usernameNormalized = normalizeIdentity(next.username)
     const emailNormalized = normalizeIdentity(next.email)
     await this.assertIdentityAvailable(usernameNormalized, emailNormalized, id)
     const scope = await this.validateScope(next.role, next.authorizationScope, ctx)
     const persisted: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope } = { role: next.role, active: next.active, scope }
     if (existing.authenticationSource === "LOCAL") Object.assign(persisted, { fullName: next.fullName, username: next.username, usernameNormalized, email: next.email, emailNormalized })
-    return this.withProvisioningError(() => this.repository.updateUser(id, persisted))
+    try {
+      return await this.withProvisioningError(() => this.repository.updateUser(id, persisted))
+    } catch (error) {
+      // Raised by the repository transaction that actually wrote the row, so a concurrent request
+      // stripping the *other* Admin has already been accounted for by the time we get here.
+      if (error instanceof LastActiveAdminError) throw new ApiError(409, "LAST_ACTIVE_ADMIN", "Sistemde en az bir aktif Admin bulunmalıdır.")
+      throw error
+    }
   }
 
   async resetLocalUserPassword(id: string, password: string, ctx: AccessContext): Promise<void> {

@@ -1,7 +1,8 @@
-import { EmployeeProvisioningScopeError, type AdminRepository, type PersistedAdminUserInput } from "../../../repositories/admin-repository.js"
+import { EmployeeProvisioningScopeError, LastActiveAdminError, type AdminRepository, type PersistedAdminUserInput } from "../../../repositories/admin-repository.js"
 import { roleRequiresEmployeeProfile, type AdminUser, type AuthorizationScope } from "../types.js"
 
 const clone = <T>(value: T): T => structuredClone(value)
+const isActiveAdmin = (user: Pick<AdminUser, "role" | "active">) => user.role === "ADMIN" && user.active
 
 export interface InMemoryEmployeeProfile {
   id: string
@@ -33,7 +34,6 @@ export class InMemoryAdminRepository implements AdminRepository {
   async findEmployeeProfileByUserId(userId: string) { const employee = this.employees.find((candidate) => candidate.userId === userId); return employee ? clone(employee) : null }
   async findUserByUsernameNormalized(value: string) { const user = this.users.find((candidate) => candidate.username.trim().toLowerCase() === value); return user ? clone(user) : null }
   async findUserByEmailNormalized(value: string) { const user = this.users.find((candidate) => candidate.email.trim().toLowerCase() === value); return user ? clone(user) : null }
-  async countActiveAdmins(excludeUserId?: string) { return this.users.filter((user) => user.id !== excludeUserId && user.active && user.role === "ADMIN").length }
   async createLocalUser(input: PersistedAdminUserInput & { scope: AuthorizationScope }) {
     const now = new Date("2026-01-01T00:00:00.000Z").toISOString()
     const user: AdminUser = { id: `user-${this.sequence + 1}`, fullName: input.fullName, username: input.username, email: input.email, authenticationSource: "LOCAL", role: input.role, authorizationScope: clone(input.scope), active: input.active, createdAt: now, updatedAt: now }
@@ -48,6 +48,9 @@ export class InMemoryAdminRepository implements AdminRepository {
     const current = this.users.find((user) => user.id === id)
     if (!current) throw new Error("User not found")
     const next: AdminUser = { ...current, ...(input.fullName !== undefined ? { fullName: input.fullName } : {}), ...(input.username !== undefined ? { username: input.username } : {}), ...(input.email !== undefined ? { email: input.email } : {}), ...(input.role !== undefined ? { role: input.role } : {}), ...(input.active !== undefined ? { active: input.active } : {}), ...(input.scope ? { authorizationScope: clone(input.scope) } : {}), updatedAt: new Date("2026-01-01T00:00:00.000Z").toISOString() }
+    // Mirrors PrismaAdminRepository: the invariant is decided against the state this very write
+    // produces, not against a count the caller read beforehand.
+    if (isActiveAdmin(current) && !isActiveAdmin(next) && !this.users.some((user) => user.id !== id && isActiveAdmin(user))) throw new LastActiveAdminError()
     const currentEmployee = this.employees.find((employee) => employee.userId === id) ?? null
     const nextEmployee = this.synchronizedEmployee(next, currentEmployee)
     this.users = this.users.map((user) => user.id === id ? next : user)

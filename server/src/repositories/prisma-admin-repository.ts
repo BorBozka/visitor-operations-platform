@@ -1,7 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
 
+import { withWriteConflictRetry } from "../lib/prisma-conflict.js"
 import { parseApplicationRole, roleRequiresEmployeeProfile, type AdminUser, type AuthorizationScope } from "../modules/admin/types.js"
-import { EmployeeProvisioningScopeError, type AdminRepository, type PersistedAdminUserInput } from "./admin-repository.js"
+import { EmployeeProvisioningScopeError, LastActiveAdminError, type AdminRepository, type PersistedAdminUserInput } from "./admin-repository.js"
 
 const userInclude = { companyScopes: { select: { companyId: true } }, facilityScopes: { select: { facilityId: true } }, securityGateScopes: { select: { securityGateId: true } } } as const
 const provisioningUserInclude = { ...userInclude, employeeProfile: { select: { id: true } } } as const
@@ -14,6 +15,26 @@ function toUser(row: { id: string; fullName: string; username: string; email: st
 
 function scopeWrites(scope: AuthorizationScope) {
   return { companyScopes: { deleteMany: {}, create: scope.companyIds.map((companyId) => ({ companyId })) }, facilityScopes: { deleteMany: {}, create: scope.facilityIds.map((facilityId) => ({ facilityId })) }, securityGateScopes: { deleteMany: {}, create: scope.securityGateIds.map((securityGateId) => ({ securityGateId })) } }
+}
+
+const isActiveAdmin = (user: { role: string; active: boolean }) => user.role === "ADMIN" && user.active
+
+/**
+ * "At least one active ADMIN must remain", decided from the rows this transaction itself wrote.
+ *
+ * The user row is updated *before* this runs, so the count below observes the target's real
+ * post-write state instead of a service-side snapshot taken before it. Under SERIALIZABLE the
+ * update holds an exclusive lock on the target's `[active, role]` index entries while the count
+ * takes a key-range lock over the whole `active = true AND role = ADMIN` range, so two
+ * transactions each stripping a different Admin cannot both read the other as still active: one
+ * is aborted as a deadlock victim, retried by {@link withWriteConflictRetry}, and then sees the
+ * committed single-Admin state and is rejected. A write that leaves the target an active Admin,
+ * or one whose target was not an active Admin to begin with, cannot break the invariant and is
+ * not counted at all.
+ */
+async function assertActiveAdminRemains(transaction: Prisma.TransactionClient, before: { role: string; active: boolean }, after: { role: string; active: boolean }) {
+  if (!isActiveAdmin(before) || isActiveAdmin(after)) return
+  if (await transaction.user.count({ where: { role: "ADMIN", active: true } }) === 0) throw new LastActiveAdminError()
 }
 
 async function requireEmployeeFacility(transaction: Prisma.TransactionClient, role: AdminUser["role"], scope: AuthorizationScope) {
@@ -52,7 +73,6 @@ export class PrismaAdminRepository implements AdminRepository {
   async findUser(id: string) { const row = await this.prisma.user.findUnique({ where: { id }, include: userInclude }); return row ? toUser(row) : null }
   async findUserByUsernameNormalized(value: string) { const row = await this.prisma.user.findUnique({ where: { usernameNormalized: value }, include: userInclude }); return row ? toUser(row) : null }
   async findUserByEmailNormalized(value: string) { const row = await this.prisma.user.findUnique({ where: { emailNormalized: value }, include: userInclude }); return row ? toUser(row) : null }
-  countActiveAdmins(excludeUserId?: string) { return this.prisma.user.count({ where: { role: "ADMIN", active: true, ...(excludeUserId ? { id: { not: excludeUserId } } : {}) } }) }
   async createLocalUser(input: PersistedAdminUserInput & { scope: AuthorizationScope }) {
     const row = await this.prisma.$transaction(async (transaction) => {
       const user = await transaction.user.create({ data: { fullName: input.fullName, username: input.username, usernameNormalized: input.usernameNormalized, email: input.email, emailNormalized: input.emailNormalized, passwordHash: input.passwordHash, role: input.role, authenticationSource: "LOCAL", active: input.active, companyScopes: { create: input.scope.companyIds.map((companyId) => ({ companyId })) }, facilityScopes: { create: input.scope.facilityIds.map((facilityId) => ({ facilityId })) }, securityGateScopes: { create: input.scope.securityGateIds.map((securityGateId) => ({ securityGateId })) } }, include: provisioningUserInclude })
@@ -62,11 +82,13 @@ export class PrismaAdminRepository implements AdminRepository {
     return toUser(row)
   }
   async updateUser(id: string, input: Partial<PersistedAdminUserInput> & { scope?: AuthorizationScope }) {
-    const row = await this.prisma.$transaction(async (transaction) => {
+    const row = await withWriteConflictRetry(() => this.prisma.$transaction(async (transaction) => {
+      const before = await transaction.user.findUniqueOrThrow({ where: { id }, select: { role: true, active: true } })
       const user = await transaction.user.update({ where: { id }, data: { ...(input.fullName !== undefined ? { fullName: input.fullName } : {}), ...(input.username !== undefined ? { username: input.username, usernameNormalized: input.usernameNormalized } : {}), ...(input.email !== undefined ? { email: input.email, emailNormalized: input.emailNormalized } : {}), ...(input.role !== undefined ? { role: input.role } : {}), ...(input.active !== undefined ? { active: input.active } : {}), ...(input.scope ? scopeWrites(input.scope) : {}) }, include: provisioningUserInclude })
+      await assertActiveAdminRemains(transaction, before, user)
       await synchronizeEmployeeProfile(transaction, user)
       return user
-    }, { isolationLevel: "Serializable" })
+    }, { isolationLevel: "Serializable" }))
     return toUser(row)
   }
   async findScopeReferences(scope: AuthorizationScope) {

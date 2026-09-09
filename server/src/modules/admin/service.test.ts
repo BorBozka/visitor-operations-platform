@@ -79,6 +79,24 @@ describe("AdminService", () => {
     await expect(service.updateUser(admin.id, { active: false }, OTHER_ADMIN)).rejects.toMatchObject({ code: "LAST_ACTIVE_ADMIN" })
   })
 
+  it("rejects removing the last active Admin's ADMIN role", async () => {
+    const service = createService(new InMemoryAdminRepository([admin], references))
+    await expect(service.updateUser(admin.id, { role: "MANAGER", authorizationScope: operationalScope }, OTHER_ADMIN)).rejects.toMatchObject({ statusCode: 409, code: "LAST_ACTIVE_ADMIN" })
+  })
+
+  it("lets one of two active Admins be retired while the survivor keeps the invariant alive", async () => {
+    const second = { ...admin, id: "admin-2", username: "admin2", email: "admin2@example.com" }
+    const repository = new InMemoryAdminRepository([admin, second], references)
+    const service = createService(repository)
+
+    await expect(service.updateUser(second.id, { active: false }, ACTING)).resolves.toMatchObject({ id: second.id, active: false })
+    expect(await repository.findUser(admin.id)).toMatchObject({ role: "ADMIN", active: true })
+
+    // The survivor is now the last one, so the same mutation is refused.
+    await expect(service.updateUser(admin.id, { active: false }, OTHER_ADMIN)).rejects.toMatchObject({ statusCode: 409, code: "LAST_ACTIVE_ADMIN" })
+    expect(await repository.findUser(admin.id)).toMatchObject({ role: "ADMIN", active: true })
+  })
+
   it("prevents self-demotion", async () => {
     const service = createService(new InMemoryAdminRepository([admin], references))
     await expect(service.updateUser(admin.id, { role: "MANAGER" }, ACTING)).rejects.toMatchObject({ code: "SELF_ADMIN_DEMOTION" })
