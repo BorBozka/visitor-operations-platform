@@ -20,6 +20,14 @@ describe("ManagerNotifications", () => {
     expect(componentSource).not.toContain("Bildirimleri temizle")
   })
 
+  // NEW-9: a `SENDING` invitation the backend flagged stale is an abandoned attempt, so this panel
+  // must present it as a failed send with its retry button rather than a permanent spinner.
+  it("gives a stale SENDING invitation its retry action back", () => {
+    expect(componentSource).toContain('visit.invitationStatus === "SENDING" && visit.invitationSendStale ? "FAILED" : visit.invitationStatus')
+    expect(componentSource).toContain('persistedStatus === "SENDING" || sendingVisitIds.has(visit.id)')
+    expect(componentSource).not.toContain('visit.invitationStatus === "SENDING" || sendingVisitIds.has(visit.id)')
+  })
+
   it("sends notification invitations directly without opening the visit form", () => {
     expect(componentSource).toContain("sendVisitInvitation(visitId)")
     expect(componentSource).toContain("void sendInvitation(visit.id)")

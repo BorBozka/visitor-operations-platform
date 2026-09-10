@@ -18,6 +18,14 @@ describe("VisitFormDialog invitation action", () => {
     expect(dialogSource).not.toContain("{savedMeetingId && (\n")
   })
 
+  // NEW-9: a `SENDING` record whose send attempt the backend wrote off must not keep this dialog
+  // from sending — for that visitor or for anyone else on the same meeting.
+  it("counts a stale SENDING as pending and blocks only on a send still in flight", () => {
+    expect(dialogSource).toContain("hasVisitorEmail(item.visitor) && isInvitationRetryable(item)")
+    expect(dialogSource).toContain('item.invitationStatus === "SENDING" && !item.invitationSendStale')
+    expect(dialogSource).not.toContain('some((item) => item.invitationStatus === "SENDING")')
+  })
+
   it("keeps the explanation of why sending is not possible yet", () => {
     expect(dialogSource).toContain("Davet göndermek için önce ziyareti kaydedin.")
   })

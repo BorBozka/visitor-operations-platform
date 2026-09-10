@@ -55,6 +55,7 @@ export interface VisitDto {
   vehiclePlate?: string
   status: Visit["status"]
   invitationStatus: Visit["invitationStatus"]
+  invitationSendStale?: boolean
   invitationSentAt?: string
   invitationError?: string
   cancelledAt?: string
@@ -135,6 +136,7 @@ export function mapVisit(dto: VisitDto): Visit {
     hostCorrectedBy: dto.hostCorrectedBy,
     status: dto.status,
     invitationStatus: dto.invitationStatus,
+    invitationSendStale: dto.invitationSendStale,
     invitationSentAt: dto.invitationSentAt,
     invitationError: dto.invitationError,
     createdAt: dto.createdAt,

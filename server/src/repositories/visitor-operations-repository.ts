@@ -8,6 +8,7 @@ import type {
   VisitorCardDto, VisitorCardStatus, VisitorRuleDto, VisitDto, VisitTypeDto,
 } from "../modules/visitor-operations/types.js"
 import { parseEnum, invitationStatuses, ruleAcceptanceMethods, visitorCardStatuses, visitStatuses } from "../modules/visitor-operations/types.js"
+import { invitationSendStaleBefore, isInvitationSendStale } from "../modules/visitor-operations/invitation-staleness.js"
 import { assertMeetingPlanningUnlocked } from "../modules/visitor-operations/meeting-planning-lock.js"
 import type { ResourceExtensionGuard } from "./resource-assignment-repository.js"
 
@@ -120,6 +121,9 @@ export function toVisit(row: VisitRow): VisitDto {
     actualCheckIn: row.actualCheckIn?.toISOString(), actualCheckOut: row.actualCheckOut?.toISOString(), visitorCardReturned: row.visitorCardReturned ?? undefined,
     visitorCardId: row.visitorCardId ?? undefined, visitorCardNumber: row.visitorCardNumber ?? undefined, vehiclePlate: row.vehiclePlate ?? undefined,
     status: parseEnum(visitStatuses, row.status, "visit status"), invitationStatus: parseEnum(invitationStatuses, row.invitationStatus, "invitation status"),
+    // Derived read-model flag, not a stored column: it answers "has this send attempt been
+    // abandoned?" as of the moment the row is read, so clients never date-compare it themselves.
+    invitationSendStale: isInvitationSendStale(row.invitationStatus, row.invitationSendStartedAt, new Date()) || undefined,
     invitationSentAt: row.invitationSentAt?.toISOString(), invitationError: row.invitationError ?? undefined, cancelledAt: row.cancelledAt?.toISOString(),
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), meeting: toMeeting(row.meeting),
     ruleAcceptance: acceptance ? { id: acceptance.id, ruleId: acceptance.visitorRuleVersionId, ruleVersion: acceptance.ruleVersion, acceptedAt: acceptance.acceptedAt.toISOString(), method: parseEnum(ruleAcceptanceMethods, acceptance.method, "rule acceptance method"), contentSnapshot: acceptance.contentSnapshot } : undefined,
@@ -158,7 +162,12 @@ export interface VisitorOperationsRepository {
   cancelVisit(id: string, userId: string, now: Date): Promise<void>
   cancelMeeting(id: string, userId: string, now: Date): Promise<void>
   closeMeeting(id: string, source: "MANUAL" | "VISITOR_CHECK_OUT", now: Date): Promise<void>
-  prepareInvitation(visitId: string, tokenHash: string): Promise<{ visit: VisitDto; claimed: boolean }>
+  /**
+   * Atomically claims the one right to send this invitation, returning `claimed: false` when the
+   * record is already sent or has a send attempt still in flight. See the implementation for the
+   * compare-and-set that also makes an abandoned `SENDING` attempt re-claimable.
+   */
+  prepareInvitation(visitId: string, tokenHash: string, now: Date): Promise<{ visit: VisitDto; claimed: boolean }>
   finishInvitation(visitId: string, succeeded: boolean, now: Date): Promise<void>
   findPublicPreRegistration(tokenHash: string): Promise<{ visit: VisitDto; activeRule: VisitorRuleDto | null } | null>
   updatePublicVisitor(tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }): Promise<void>
@@ -275,12 +284,38 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
   async cancelVisit(id: string, userId: string, now: Date) { await this.prisma.visit.update({ where: { id }, data: { status: "CANCELLED", cancelledAt: now, cancelledByUserId: userId } }) }
   async cancelMeeting(id: string, userId: string, now: Date) { await this.prisma.visit.updateMany({ where: { meetingId: id, status: "PLANNED" }, data: { status: "CANCELLED", cancelledAt: now, cancelledByUserId: userId } }) }
   async closeMeeting(id: string, source: "MANUAL" | "VISITOR_CHECK_OUT", now: Date) { await this.prisma.meeting.update({ where: { id }, data: { actualMeetingEnd: now, meetingEndSource: source } }) }
-  async prepareInvitation(visitId: string, tokenHash: string) {
+  /**
+   * Claims the right to send one invitation email. The claim — never the caller's snapshot — is
+   * the authority on invitation state: the `updateMany` is a compare-and-set on the *persisted*
+   * columns, so of two callers racing the same record exactly one gets `claimed: true` and only
+   * that one sends.
+   *
+   * A stale `SENDING` (`invitation-staleness.ts`) is claimable so a send attempt lost to a process
+   * restart can be retried, and re-claiming it is safe against a second racer for the same reason
+   * every other transition is: writing `invitationSendStartedAt` to *now* falsifies the staleness
+   * predicate, so the loser's compare-and-set matches nothing. A fresh `SENDING` never matches at
+   * all, which is what keeps a normal concurrent resend from mailing twice.
+   *
+   * The upsert always writes the new hash, so a re-claim revokes the previous attempt's token
+   * rather than reviving it.
+   */
+  async prepareInvitation(visitId: string, tokenHash: string, now: Date) {
+    const staleBefore = invitationSendStaleBefore(now)
     let claimed = false
     await this.prisma.$transaction(async (tx) => {
       const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { visitor: true } })
-      if (!visit || visit.status !== "PLANNED" || !visit.visitor.email || !["NOT_SENT", "FAILED"].includes(visit.invitationStatus)) return
-      const changed = await tx.visit.updateMany({ where: { id: visitId, invitationStatus: { in: ["NOT_SENT", "FAILED"] } }, data: { invitationStatus: "SENDING", invitationError: null } })
+      if (!visit || visit.status !== "PLANNED" || !visit.visitor.email) return
+      const changed = await tx.visit.updateMany({
+        where: {
+          id: visitId,
+          OR: [
+            { invitationStatus: { in: ["NOT_SENT", "FAILED"] } },
+            { invitationStatus: "SENDING", invitationSendStartedAt: null },
+            { invitationStatus: "SENDING", invitationSendStartedAt: { lte: staleBefore } },
+          ],
+        },
+        data: { invitationStatus: "SENDING", invitationSendStartedAt: now, invitationError: null },
+      })
       if (changed.count) {
         claimed = true
         await tx.invitation.upsert({ where: { visitId }, create: { visitId, tokenHash }, update: { tokenHash } })

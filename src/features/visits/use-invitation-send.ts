@@ -60,11 +60,14 @@ export function useInvitationSend() {
     }
   }, [sendVisitInvitation])
 
-  const resolveStatus = useCallback((visit: Pick<Visit, "id" | "invitationStatus">): InvitationStatus => {
-    if (visit.invitationStatus === "SENDING" || sendingIds.has(visit.id)) return "SENDING"
+  const resolveStatus = useCallback((visit: Pick<Visit, "id" | "invitationStatus" | "invitationSendStale">): InvitationStatus => {
+    if ((visit.invitationStatus === "SENDING" && !visit.invitationSendStale) || sendingIds.has(visit.id)) return "SENDING"
     if (failedIds.has(visit.id)) return "FAILED"
     if (sentIds.has(visit.id)) return "SENT"
-    return visit.invitationStatus
+    // Still `SENDING` here means the backend flagged the attempt stale — a send lost to a process
+    // restart, not one in flight. Reporting it as a failure gives the row back its retry action,
+    // which the backend's send endpoint honours by re-claiming the record.
+    return visit.invitationStatus === "SENDING" ? "FAILED" : visit.invitationStatus
   }, [sendingIds, failedIds, sentIds])
 
   return { sendInvitation, resolveStatus, sentIds }

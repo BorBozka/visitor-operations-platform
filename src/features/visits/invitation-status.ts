@@ -16,6 +16,16 @@ export function getVisiblePendingInvitationVisits(visits: Visit[], dismissedVisi
   return getPendingInvitationVisits(visits).filter((visit) => !dismissedVisitIds.has(visit.id))
 }
 
+// Can the operator act on this invitation right now? `SENT` is done and a send still in flight
+// must be left alone, but a `SENDING` record the backend flags as stale lost its attempt to a
+// process restart and would otherwise sit on a spinner forever — the send endpoints re-claim such
+// a record, so every surface offers the retry instead of hiding the action. Staleness is the
+// server's call (`invitationSendStale`); nothing here compares timestamps.
+export function isInvitationRetryable(visit: Pick<Visit, "invitationStatus" | "invitationSendStale">) {
+  if (visit.invitationStatus === "NOT_SENT" || visit.invitationStatus === "FAILED") return true
+  return visit.invitationStatus === "SENDING" && visit.invitationSendStale === true
+}
+
 export function getActionRequiredInvitationVisits(visits: Visit[], currentEmployeeId?: string) {
   if (!currentEmployeeId) return []
 
@@ -23,12 +33,13 @@ export function getActionRequiredInvitationVisits(visits: Visit[], currentEmploy
     visit.creatorEmployeeId === currentEmployeeId &&
     visit.status === "PLANNED" &&
     hasVisitorEmail(visit.visitor) &&
-    (visit.invitationStatus === "NOT_SENT" || visit.invitationStatus === "FAILED"),
+    isInvitationRetryable(visit),
   )
 }
 
 export function getInvitationActionLabel(visit: Visit, isSending = false) {
-  if (isSending || visit.invitationStatus === "SENDING") return "Gönderiliyor…"
+  if (isSending) return "Gönderiliyor…"
+  if (visit.invitationStatus === "SENDING") return visit.invitationSendStale ? "Yeniden gönder" : "Gönderiliyor…"
   if (visit.invitationStatus === "FAILED") return "Yeniden gönder"
   if (visit.invitationStatus === "SENT") return "Davet gönderildi"
   return "Daveti gönder"

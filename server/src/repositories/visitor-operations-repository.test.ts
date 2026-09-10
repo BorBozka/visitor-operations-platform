@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client"
 import { describe, expect, it, vi } from "vitest"
 
+import { INVITATION_SEND_STALE_AFTER_MS } from "../modules/visitor-operations/invitation-staleness.js"
 import type { MeetingInput, SecurityCorrectionInput } from "../modules/visitor-operations/types.js"
 import { CheckInConflictError, PrismaVisitorOperationsRepository, PublicInvitationInactiveError, VisitorCardConflictError } from "./visitor-operations-repository.js"
 
@@ -47,6 +48,7 @@ interface FixtureVisit {
   meeting: FixtureMeeting
   status: string
   invitationStatus: string
+  invitationSendStartedAt: Date | null
   invitationSentAt: Date | null
   invitationError: string | null
   actualCheckIn: Date | null
@@ -103,6 +105,7 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
     meeting,
     status: "PLANNED",
     invitationStatus: "SENT",
+    invitationSendStartedAt: sentAt,
     invitationSentAt: sentAt,
     invitationError: "historical planned error",
     actualCheckIn: null,
@@ -129,13 +132,36 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
   let invitation: { visitId: string; tokenHash: string } | null = { visitId: planned.id, tokenHash: "existing-token-hash" }
 
   const meetingUpdate = vi.fn(async ({ data }: { data: Partial<FixtureMeeting> }) => Object.assign(meeting, data))
-  const visitUpdateMany = vi.fn(async ({ where, data }: { where: { meetingId?: string; status?: string; id?: string; invitationStatus?: string | { in: string[] } }; data: Partial<FixtureVisit> }) => {
+  // Mirrors the subset of Prisma's `updateMany` filtering these tests rely on, including the
+  // `OR` branches and the `invitationSendStartedAt` bound that make a stale send re-claimable.
+  interface VisitWhere {
+    meetingId?: string
+    status?: string
+    id?: string
+    invitationStatus?: string | { in: string[] }
+    invitationSendStartedAt?: null | { lte: Date }
+    OR?: VisitWhere[]
+  }
+  const matchesVisit = (visit: FixtureVisit, where: VisitWhere): boolean => {
+    const invitationStatusMatches = typeof where.invitationStatus === "string"
+      ? visit.invitationStatus === where.invitationStatus
+      : where.invitationStatus === undefined || where.invitationStatus.in.includes(visit.invitationStatus)
+    const sendStartedAtMatches = where.invitationSendStartedAt === undefined
+      ? true
+      : where.invitationSendStartedAt === null
+        ? visit.invitationSendStartedAt === null
+        : visit.invitationSendStartedAt !== null && visit.invitationSendStartedAt.getTime() <= where.invitationSendStartedAt.lte.getTime()
+    return (where.meetingId === undefined || visit.meetingId === where.meetingId)
+      && (where.status === undefined || visit.status === where.status)
+      && (where.id === undefined || visit.id === where.id)
+      && invitationStatusMatches
+      && sendStartedAtMatches
+      && (where.OR === undefined || where.OR.some((branch) => matchesVisit(visit, branch)))
+  }
+  const visitUpdateMany = vi.fn(async ({ where, data }: { where: VisitWhere; data: Partial<FixtureVisit> }) => {
     let count = 0
     for (const visit of meeting.visits) {
-      const invitationStatusMatches = typeof where.invitationStatus === "string"
-        ? visit.invitationStatus === where.invitationStatus
-        : where.invitationStatus === undefined || where.invitationStatus.in.includes(visit.invitationStatus)
-      if ((where.meetingId === undefined || visit.meetingId === where.meetingId) && (where.status === undefined || visit.status === where.status) && (where.id === undefined || visit.id === where.id) && invitationStatusMatches) {
+      if (matchesVisit(visit, where)) {
         Object.assign(visit, data)
         count += 1
       }
@@ -227,7 +253,7 @@ describe("PrismaVisitorOperationsRepository invitation resets", () => {
     })
 
     await expect(repository.findPublicPreRegistration("existing-token-hash")).resolves.toBeNull()
-    const prepared = await repository.prepareInvitation("visit-planned", "replacement-token-hash")
+    const prepared = await repository.prepareInvitation("visit-planned", "replacement-token-hash", updatedAt)
     expect(prepared.claimed).toBe(true)
     await repository.finishInvitation("visit-planned", true, updatedAt)
     await expect(repository.findPublicPreRegistration("replacement-token-hash")).resolves.toMatchObject({ visit: { visitor: { firstName: "Bora", lastName: "Demir", email: "bora@example.test", company: "Beta", phone: "5550000000" }, invitationStatus: "SENT" } })
@@ -263,6 +289,83 @@ describe("PrismaVisitorOperationsRepository invitation resets", () => {
     expect(fixture.planned.invitationStatus).toBe("NOT_SENT")
     expect(fixture.invitation()).toBeNull()
     expect(fixture.prisma.$transaction).toHaveBeenCalledOnce()
+  })
+})
+
+/**
+ * The claim side of stale-`SENDING` recovery (NEW-9). These exercise the compare-and-set in
+ * `prepareInvitation` directly, because that predicate — not the caller's snapshot — is what
+ * decides who may send. `now` is supplied explicitly, so nothing here waits on real minutes.
+ */
+describe("PrismaVisitorOperationsRepository stale invitation claims", () => {
+  const claimAt = new Date("2026-09-02T12:00:00.000Z")
+  const staleAt = new Date(claimAt.getTime() - INVITATION_SEND_STALE_AFTER_MS - 1_000)
+  const freshAt = new Date(claimAt.getTime() - 1_000)
+
+  function sendingFixture(sendStartedAt: Date | null) {
+    const fixture = createMeetingFixture()
+    Object.assign(fixture.planned, { invitationStatus: "SENDING", invitationSendStartedAt: sendStartedAt, invitationSentAt: null })
+    return fixture
+  }
+
+  it("refuses to claim a SENDING attempt that can still be in flight", async () => {
+    const fixture = sendingFixture(freshAt)
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    const prepared = await repository.prepareInvitation("visit-planned", "second-attempt-hash", claimAt)
+
+    expect(prepared.claimed).toBe(false)
+    expect(fixture.planned).toMatchObject({ invitationStatus: "SENDING", invitationSendStartedAt: freshAt })
+    expect(fixture.invitation()).toMatchObject({ tokenHash: "existing-token-hash" })
+  })
+
+  it("claims a stale SENDING attempt, redating it and replacing the abandoned token", async () => {
+    const fixture = sendingFixture(staleAt)
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    const prepared = await repository.prepareInvitation("visit-planned", "recovery-token-hash", claimAt)
+
+    expect(prepared.claimed).toBe(true)
+    expect(fixture.planned).toMatchObject({ invitationStatus: "SENDING", invitationSendStartedAt: claimAt, invitationError: null })
+    expect(fixture.invitation()).toMatchObject({ tokenHash: "recovery-token-hash" })
+    // NEW-1: the abandoned attempt's link must not survive the recovery.
+    await expect(repository.findPublicPreRegistration("existing-token-hash")).resolves.toBeNull()
+  })
+
+  it("claims a SENDING attempt left undated by an older release", async () => {
+    const fixture = sendingFixture(null)
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.prepareInvitation("visit-planned", "legacy-recovery-hash", claimAt)).resolves.toMatchObject({ claimed: true })
+    expect(fixture.planned).toMatchObject({ invitationSendStartedAt: claimAt })
+  })
+
+  it("gives exactly one of two concurrent claims on the same stale attempt the right to send", async () => {
+    const fixture = sendingFixture(staleAt)
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    const [first, second] = await Promise.all([
+      repository.prepareInvitation("visit-planned", "racer-one-hash", claimAt),
+      repository.prepareInvitation("visit-planned", "racer-two-hash", claimAt),
+    ])
+
+    expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1)
+    expect(fixture.invitation()).toMatchObject({ tokenHash: first.claimed ? "racer-one-hash" : "racer-two-hash" })
+  })
+
+  it("reports a claimed SENDING as stale only once its attempt is old enough to be abandoned", async () => {
+    const fixture = sendingFixture(staleAt)
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(claimAt)
+      await expect(repository.findVisit("visit-planned")).resolves.toMatchObject({ invitationStatus: "SENDING", invitationSendStale: true })
+      vi.setSystemTime(new Date(staleAt.getTime() + INVITATION_SEND_STALE_AFTER_MS - 1_000))
+      await expect(repository.findVisit("visit-planned")).resolves.toMatchObject({ invitationStatus: "SENDING", invitationSendStale: undefined })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

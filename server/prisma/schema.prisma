@@ -270,6 +270,11 @@ model Visit {
   vehiclePlate          String?          @db.VarChar(32)
   status                String           @db.VarChar(20)
   invitationStatus      String           @default("NOT_SENT") @db.VarChar(20)
+  // When the current send attempt claimed this Visit (its NOT_SENT/FAILED -> SENDING transition),
+  // not when an email was accepted — that is invitationSentAt. It exists because neither existing
+  // timestamp can date that transition: invitationSentAt is written only on success, and
+  // Visit.updatedAt is bumped by every unrelated Visit mutation (check-in, cancel, plate edits).
+  invitationSendStartedAt DateTime?      @db.DateTime2
   invitationSentAt      DateTime?        @db.DateTime2
   invitationError       String?          @db.NVarChar(1000)
   cancelledAt           DateTime?        @db.DateTime2

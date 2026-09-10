@@ -124,6 +124,10 @@ export interface VisitRecord {
   hostCorrectedBy?: string
   status: VisitStatus
   invitationStatus: InvitationStatus
+  // Server-decided: a `SENDING` invitation whose send attempt was abandoned (a restart between
+  // claiming the send and recording its result) and may therefore be retried. Never derive this
+  // on the client — the backend owns the threshold, and its send endpoints enforce the same rule.
+  invitationSendStale?: boolean
   invitationSentAt?: string
   invitationError?: string
   createdAt: string

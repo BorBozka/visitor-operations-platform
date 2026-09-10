@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { hasVisitorEmail, type InvitationStatus, type Visit } from "@/domain/visits"
 import { HostEmployeeCombobox } from "@/features/visits/HostEmployeeCombobox"
 import { getInvitationSendFeedback } from "@/features/visits/invitation-send-feedback"
-import { getInvitationActionLabel } from "@/features/visits/invitation-status"
+import { getInvitationActionLabel, isInvitationRetryable } from "@/features/visits/invitation-status"
 import { useVisits } from "@/features/visits/visit-context"
 import { toMeetingInput, visitFormSchema, type VisitFormValues } from "@/features/visits/visit-form-schema"
 import { formatTr } from "@/lib/date"
@@ -245,9 +245,12 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
   }
 
   const invitationTargets = invitationScope === "VISIT" && selectedVisit ? [selectedVisit] : savedVisits
-  const pendingInvitationCount = invitationTargets.filter((item) => item.status === "PLANNED" && hasVisitorEmail(item.visitor) && (item.invitationStatus === "NOT_SENT" || item.invitationStatus === "FAILED")).length
+  const pendingInvitationCount = invitationTargets.filter((item) => item.status === "PLANNED" && hasVisitorEmail(item.visitor) && isInvitationRetryable(item)).length
   const hasPendingInvitation = pendingInvitationCount > 0
-  const hasSendingInvitation = invitationTargets.some((item) => item.invitationStatus === "SENDING")
+  // Only a send actually in flight blocks the button. A `SENDING` record the backend has marked
+  // stale lost its attempt to a process restart, and blocking on it would leave this dialog
+  // permanently unable to send — for that record or for any other visitor on the same meeting.
+  const hasSendingInvitation = invitationTargets.some((item) => item.invitationStatus === "SENDING" && !item.invitationSendStale)
   const canSendInvitation = Boolean(savedMeetingId) && !form.formState.isDirty && hasPendingInvitation && !hasSendingInvitation && !isSendingInvitation
   const invitationDisabledReason = !savedMeetingId
     ? "Davet göndermek için önce ziyareti kaydedin."

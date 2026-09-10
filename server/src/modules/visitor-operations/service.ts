@@ -22,6 +22,18 @@ const noActiveRule = () => new ApiError(409, "NO_ACTIVE_RULE", "Aktif ziyaretçi
 const mutationForbidden = () =>
   new ApiError(403, "VISIT_MUTATION_FORBIDDEN", "Bu ziyaret grubu üzerinde değişiklik yapma yetkiniz yok.")
 
+/**
+ * May a manual send/resend attempt this invitation at all? `SENT` is never re-sent, and a
+ * `SENDING` attempt still in flight is left alone so a concurrent resend cannot mail twice. A
+ * `SENDING` attempt the server has marked stale — one a process restart abandoned — is retryable;
+ * this is only the cheap snapshot check, and `prepareInvitation`'s compare-and-set is what
+ * actually decides who gets to send.
+ */
+function invitationSendable(visit: Pick<VisitDto, "invitationStatus" | "invitationSendStale">): boolean {
+  if (visit.invitationStatus === "NOT_SENT" || visit.invitationStatus === "FAILED") return true
+  return visit.invitationStatus === "SENDING" && visit.invitationSendStale === true
+}
+
 /** Is a meeting visible to this caller (scope + role-specific ownership)? */
 function isMeetingVisible(ctx: AccessContext, meeting: Pick<MeetingDto, "hostCompanyId" | "facilityId" | "creatorEmployeeId" | "hostEmployeeId">): boolean {
   if (!scopeAllows(ctx, { companyId: meeting.hostCompanyId, facilityId: meeting.facilityId })) return false
@@ -157,7 +169,7 @@ export class VisitorOperationsService {
     assertMeetingMutable(ctx, meeting.meeting)
     const delivered: VisitDto[] = []
     for (const visit of meeting.visits) {
-      if (visit.status !== "PLANNED" || !visit.visitor.email || !["NOT_SENT", "FAILED"].includes(visit.invitationStatus)) continue
+      if (visit.status !== "PLANNED" || !visit.visitor.email || !invitationSendable(visit)) continue
       delivered.push(await this.deliverInvitation(visit.id))
     }
     return delivered
@@ -173,10 +185,10 @@ export class VisitorOperationsService {
     const current = await this.requireVisit(id)
     this.requireStatus(current, "PLANNED", "Yalnızca planlanmış ziyaretler için davet gönderilebilir.")
     if (!current.visitor.email) throw new ApiError(409, "VISITOR_EMAIL_REQUIRED", "Ziyaretçinin davet gönderilebilecek e-posta adresi bulunmuyor.")
-    if (["SENT", "SENDING"].includes(current.invitationStatus)) return current
+    if (!invitationSendable(current)) return current
 
     const rawToken = this.createInvitationToken()
-    const prepared = await this.repository.prepareInvitation(id, hashToken(rawToken))
+    const prepared = await this.repository.prepareInvitation(id, hashToken(rawToken), this.now())
     if (!prepared.claimed) return prepared.visit
     const link = `${this.webOrigin.replace(/\/$/, "")}/visitor/pre-registration?token=${encodeURIComponent(rawToken)}`
     try {

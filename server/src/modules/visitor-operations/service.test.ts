@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from "vitest"
 import type { AccessContext } from "../../lib/authorization.js"
 import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
 import { CheckInConflictError, NoActiveVisitorRuleError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { INVITATION_SEND_STALE_AFTER_MS, isInvitationSendStale } from "./invitation-staleness.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
-import type { MeetingDto, MeetingInput, SecurityCorrectionInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
+import type { InvitationStatus, MeetingDto, MeetingInput, SecurityCorrectionInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
 
 const now = new Date("2026-09-02T10:00:00.000Z")
 const scope = { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }
@@ -147,6 +148,172 @@ describe("VisitorOperationsService invitations", () => {
     await expect(service.sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
     expect(email.messages).toHaveLength(1)
     expect(email.messages[0].text).toContain("token=resend-token")
+  })
+})
+
+/**
+ * Persisted-state fixture for the send path (NEW-9). Unlike `invitationFixture` above — which
+ * always hands back a successful claim — this one models what the repository actually guarantees:
+ * `findVisit` derives `invitationSendStale` exactly the way `toVisit` does, and
+ * `prepareInvitation` is a compare-and-set, so a caller whose snapshot is out of date loses the
+ * claim and must not send. Every timestamp comes from `clock`, so nothing waits on real minutes.
+ */
+function sendClaimFixture(initial: { invitationStatus?: InvitationStatus; sendStartedAt?: Date | null } = {}) {
+  const clock = { now }
+  const state = {
+    invitationStatus: initial.invitationStatus ?? ("NOT_SENT" as InvitationStatus),
+    sendStartedAt: initial.sendStartedAt ?? null,
+    invitationError: undefined as string | undefined,
+  }
+  const tokenHashes: string[] = []
+  const read = () => visit({
+    invitationStatus: state.invitationStatus,
+    invitationSendStale: isInvitationSendStale(state.invitationStatus, state.sendStartedAt, clock.now) || undefined,
+    invitationError: state.invitationError,
+  })
+  // Deliberately free of internal `await`s: the check and the write stay in one synchronous step,
+  // the way the repository's transactional compare-and-set does.
+  const claim = (tokenHash: string, at: Date) => {
+    const claimable = state.invitationStatus === "NOT_SENT" || state.invitationStatus === "FAILED"
+      || isInvitationSendStale(state.invitationStatus, state.sendStartedAt, at)
+    if (!claimable) return { visit: read(), claimed: false }
+    state.invitationStatus = "SENDING"
+    state.sendStartedAt = at
+    state.invitationError = undefined
+    tokenHashes.push(tokenHash)
+    return { visit: read(), claimed: true }
+  }
+  const repository = unusedRepository({
+    findVisit: async () => read(),
+    findMeeting: async () => ({ meeting, visits: [read()] }),
+    prepareInvitation: async (_id: string, tokenHash: string, at: Date) => claim(tokenHash, at),
+    finishInvitation: async (_id: string, succeeded: boolean) => {
+      if (state.invitationStatus !== "SENDING") return
+      state.invitationStatus = succeeded ? "SENT" : "FAILED"
+      state.invitationError = succeeded ? undefined : "Davet teknik bir hata nedeniyle gönderilemedi."
+    },
+  })
+  return { claim, clock, repository, state, tokenHashes }
+}
+
+const STALE_AGO = new Date(now.getTime() - INVITATION_SEND_STALE_AFTER_MS - 1_000)
+const FRESH_AGO = new Date(now.getTime() - 1_000)
+
+describe("VisitorOperationsService stale SENDING recovery", () => {
+  function serviceFor(fixture: ReturnType<typeof sendClaimFixture>, email: FakeEmailSender, token = "recovery-token") {
+    return new VisitorOperationsService(fixture.repository, email, "https://web.example.test", undefined, () => fixture.clock.now, () => token)
+  }
+
+  it("sends a NOT_SENT invitation and dates the send attempt it claimed", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture()
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+    expect(email.messages).toHaveLength(1)
+    expect(fixture.state.sendStartedAt).toEqual(now)
+  })
+
+  it("records a failed send attempt as FAILED with the safe public message", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture(); email.fail = true
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({
+      invitationStatus: "FAILED", invitationError: "Davet teknik bir hata nedeniyle gönderilemedi.",
+    })
+    expect(email.messages).toHaveLength(1)
+  })
+
+  it("leaves a still in-flight SENDING alone instead of starting a second SMTP send", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: FRESH_AGO })
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENDING" })
+    expect(email.messages).toHaveLength(0)
+    expect(fixture.tokenHashes).toHaveLength(0)
+    expect(fixture.state.sendStartedAt).toEqual(FRESH_AGO)
+  })
+
+  it("lets a manual retry re-claim a stale SENDING and reports SENT when it succeeds", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: STALE_AGO })
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+    expect(email.messages).toHaveLength(1)
+    expect(fixture.state.sendStartedAt).toEqual(now)
+  })
+
+  it("reports FAILED when the retry of a stale SENDING cannot be delivered", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: STALE_AGO }); email.fail = true
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({
+      invitationStatus: "FAILED", invitationError: "Davet teknik bir hata nedeniyle gönderilemedi.",
+    })
+    expect(email.messages).toHaveLength(1)
+  })
+
+  it("gives only one of two concurrent retries the right to send the same stale SENDING", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: STALE_AGO })
+    const service = serviceFor(fixture, email)
+
+    await Promise.all([service.sendVisitInvitation("visit-1", OWNER), service.sendVisitInvitation("visit-1", OWNER)])
+
+    expect(email.messages).toHaveLength(1)
+    expect(fixture.tokenHashes).toHaveLength(1)
+  })
+
+  it("recovers a send the process abandoned after claiming it, but only once past the threshold", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture()
+    const service = serviceFor(fixture, email)
+
+    // Process death model: the claim commits and then nothing ever records its result.
+    fixture.claim("abandoned-token-hash", now)
+    expect(fixture.state.invitationStatus).toBe("SENDING")
+
+    fixture.clock.now = new Date(now.getTime() + INVITATION_SEND_STALE_AFTER_MS - 1_000)
+    await expect(service.sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENDING" })
+    expect(email.messages).toHaveLength(0)
+
+    fixture.clock.now = new Date(now.getTime() + INVITATION_SEND_STALE_AFTER_MS)
+    await expect(service.sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+    expect(email.messages).toHaveLength(1)
+  })
+
+  it("issues a fresh token when it re-claims a stale SENDING instead of reviving the abandoned one", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture()
+
+    fixture.claim("abandoned-token-hash", STALE_AGO)
+    await expect(serviceFor(fixture, email, "recovered-raw-token").sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+
+    expect(fixture.tokenHashes).toEqual(["abandoned-token-hash", hashToken("recovered-raw-token")])
+    expect(email.messages[0].text).toContain("token=recovered-raw-token")
+    expect(email.messages[0].text).not.toContain("abandoned-token-hash")
+  })
+
+  it("keeps a reset invitation revoked: recovery resumes nothing and mints a new token", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture()
+
+    fixture.claim("revoked-token-hash", STALE_AGO)
+    // The reset (reschedule / meeting edit) deletes the invitation row and returns the visit to
+    // NOT_SENT. The recovery path must treat that as a fresh send, never as an attempt to resume.
+    fixture.state.invitationStatus = "NOT_SENT"
+    fixture.state.sendStartedAt = null
+
+    await expect(serviceFor(fixture, email, "post-reset-token").sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+    expect(fixture.tokenHashes).toEqual(["revoked-token-hash", hashToken("post-reset-token")])
+  })
+
+  it("retries a stale SENDING from a meeting batch send", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: STALE_AGO })
+
+    const results = await serviceFor(fixture, email).sendMeetingInvitations("meeting-1", OWNER)
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ invitationStatus: "SENT" })
+    expect(email.messages).toHaveLength(1)
+  })
+
+  it("skips a still in-flight SENDING during a meeting batch send", async () => {
+    const email = new FakeEmailSender(), fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: FRESH_AGO })
+
+    await expect(serviceFor(fixture, email).sendMeetingInvitations("meeting-1", OWNER)).resolves.toEqual([])
+    expect(email.messages).toHaveLength(0)
+    expect(fixture.tokenHashes).toHaveLength(0)
   })
 })
 

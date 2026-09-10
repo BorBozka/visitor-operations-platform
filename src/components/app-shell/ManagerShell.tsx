@@ -226,8 +226,12 @@ function ManagerNotifications({ collapsed }: { collapsed: boolean }) {
             {notificationInvitations.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-slate-500">Eylem bekleyen davet yok.</p>
             ) : notificationInvitations.map((visit) => {
-              const isSending = visit.invitationStatus === "SENDING" || sendingVisitIds.has(visit.id)
-              const invitationStatus: InvitationStatus = isSending ? "SENDING" : failedVisitIds.has(visit.id) ? "FAILED" : visit.invitationStatus
+              // A `SENDING` record the backend flagged stale is an abandoned attempt, not one in
+              // flight: it must not hold the row on a permanent spinner, so it reads as a failed
+              // send and offers the retry the backend's send endpoint will honour.
+              const persistedStatus: InvitationStatus = visit.invitationStatus === "SENDING" && visit.invitationSendStale ? "FAILED" : visit.invitationStatus
+              const isSending = persistedStatus === "SENDING" || sendingVisitIds.has(visit.id)
+              const invitationStatus: InvitationStatus = isSending ? "SENDING" : failedVisitIds.has(visit.id) ? "FAILED" : persistedStatus
               return (
                 <DropdownMenuItem
                   key={visit.id}

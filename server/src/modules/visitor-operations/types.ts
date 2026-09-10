@@ -59,6 +59,13 @@ export interface VisitDto {
   vehiclePlate?: string
   status: VisitStatus
   invitationStatus: InvitationStatus
+  /**
+   * Only present on a `SENDING` visit whose send attempt is old enough to be treated as
+   * abandoned. The server owns this decision (see `invitation-staleness.ts`) so no client has to
+   * date-compare a send attempt itself; a client may use it to offer the retry that a permanently
+   * `SENDING` record would otherwise never get.
+   */
+  invitationSendStale?: boolean
   invitationSentAt?: string
   invitationError?: string
   cancelledAt?: string
