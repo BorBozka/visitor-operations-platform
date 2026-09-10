@@ -142,6 +142,22 @@ describe("global error handler", () => {
     expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
   })
 
+  it.each(["FST_ERR_CTP_INVALID_JSON_BODY", "FST_ERR_CTP_EMPTY_JSON_BODY"])("still sanitizes %s when it carries the wrong status", async (code) => {
+    const app = await buildApp(configFor(), { authRepository: new InMemoryAuthRepository() })
+    apps.push(app)
+    app.get(`/api/testing/spoofed-${code}`, async () => {
+      const error = new Error("internal detail") as Error & { code: string; statusCode: number }
+      error.code = code
+      error.statusCode = 500
+      throw error
+    })
+
+    const response = await app.inject({ method: "GET", url: `/api/testing/spoofed-${code}` })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
+  })
+
   it("answers an unsupported request content type with 415 and a safe body", async () => {
     const app = await loginApp()
 
@@ -156,6 +172,44 @@ describe("global error handler", () => {
     expect(response.json()).toEqual({ error: { code: "UNSUPPORTED_MEDIA_TYPE", message: "İstek içerik türü desteklenmiyor." } })
     expect(response.body).not.toContain("FST_ERR")
     expect(response.body).not.toContain("application/xml")
+    expect(response.body).not.toContain("stack")
+    expect(response.body).not.toContain("fastify")
+    expect(response.body).not.toContain("node_modules")
+  })
+
+  it("answers syntactically invalid JSON with 400 and a safe body", async () => {
+    const app = await loginApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: '{"username":"calisan",',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({ error: { code: "INVALID_REQUEST_BODY", message: "İstek gövdesi geçerli JSON formatında değil." } })
+    expect(response.body).not.toContain("FST_ERR_CTP_INVALID_JSON_BODY")
+    expect(response.body).not.toContain("Unexpected end of JSON input")
+    expect(response.body).not.toContain("stack")
+    expect(response.body).not.toContain("fastify")
+    expect(response.body).not.toContain("node_modules")
+  })
+
+  it("answers an empty JSON body with 400 and a safe body", async () => {
+    const app = await loginApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: "",
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({ error: { code: "INVALID_REQUEST_BODY", message: "İstek gövdesi geçerli JSON formatında değil." } })
+    expect(response.body).not.toContain("FST_ERR_CTP_EMPTY_JSON_BODY")
+    expect(response.body).not.toContain("Request body is empty")
     expect(response.body).not.toContain("stack")
     expect(response.body).not.toContain("fastify")
     expect(response.body).not.toContain("node_modules")

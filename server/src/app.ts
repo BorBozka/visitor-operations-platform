@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import { createAuthGuards } from "./auth/auth-guards.js"
 import { AuthService } from "./auth/auth-service.js"
 import type { AppConfig } from "./config/env.js"
-import { ApiError, payloadTooLargeError, rateLimitedError, unsupportedMediaTypeError } from "./lib/api-error.js"
+import { ApiError, invalidRequestBodyError, payloadTooLargeError, rateLimitedError, unsupportedMediaTypeError } from "./lib/api-error.js"
 import { registerAccountRoutes } from "./modules/account/routes.js"
 import { registerAuthRoutes } from "./modules/auth/routes.js"
 import { registerHealthRoutes } from "./modules/health/routes.js"
@@ -50,6 +50,8 @@ function isRateLimitError(error: unknown): boolean {
  * letting an error object dictate the response status.
  */
 const FRAMEWORK_CLIENT_ERRORS: Record<string, { statusCode: number; toApiError: () => ApiError }> = {
+  FST_ERR_CTP_INVALID_JSON_BODY: { statusCode: 400, toApiError: invalidRequestBodyError },
+  FST_ERR_CTP_EMPTY_JSON_BODY: { statusCode: 400, toApiError: invalidRequestBodyError },
   FST_ERR_CTP_BODY_TOO_LARGE: { statusCode: 413, toApiError: payloadTooLargeError },
   FST_ERR_CTP_INVALID_MEDIA_TYPE: { statusCode: 415, toApiError: unsupportedMediaTypeError },
 }
