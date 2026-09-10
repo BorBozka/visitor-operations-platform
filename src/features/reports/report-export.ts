@@ -102,8 +102,22 @@ export function buildGoodsReportRows(movements: GoodsMovement[]): string[][] {
   ])
 }
 
+// Spreadsheet apps evaluate a cell whose text starts with one of these as a formula. Report rows
+// carry visitor/public-invitation input, and the CSV is written with a BOM so Excel opens it
+// directly — so a value like `=SUM(A1:A2)` would really execute on open.
+const CSV_FORMULA_PREFIXES = ["=", "+", "-", "@", "\t", "\r"]
+
+// Formula neutralization only: prefixing with an apostrophe makes Excel/LibreOffice/Sheets read
+// the value as literal text. CSV delimiter/quote escaping stays separate and runs afterwards.
+function neutralizeCsvFormula(value: string): string {
+  return CSV_FORMULA_PREFIXES.includes(value.charAt(0)) ? `'${value}` : value
+}
+
 export function rowsToCsv(headers: string[], rows: string[][]): string {
-  const escape = (value: string) => (/[",\n;]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value)
+  const escape = (value: string) => {
+    const safe = neutralizeCsvFormula(value)
+    return /[",\n;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
+  }
   return [headers, ...rows].map((row) => row.map(escape).join(",")).join("\r\n")
 }
 

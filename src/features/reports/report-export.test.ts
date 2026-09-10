@@ -190,6 +190,27 @@ describe("rowsToCsv", () => {
     const csv = rowsToCsv(["Name"], [['Say "hi", please'], ["line1\nline2"], ["a;b"]])
     expect(csv).toBe('Name\r\n"Say ""hi"", please"\r\n"line1\nline2"\r\n"a;b"')
   })
+
+  it("neutralizes values a spreadsheet would evaluate as a formula", () => {
+    const csv = rowsToCsv(["Ziyaretçi"], [["=SUM(A1:A2)"], ["+CMD"], ["-1+2"], ["@SUM(A1:A2)"], ["\tsekme"], ["\rsatir"]])
+
+    expect(csv).toBe("Ziyaretçi\r\n'=SUM(A1:A2)\r\n'+CMD\r\n'-1+2\r\n'@SUM(A1:A2)\r\n'\tsekme\r\n'\rsatir")
+    csv
+      .split("\r\n")
+      .slice(1)
+      .forEach((line) => {
+        expect(line.startsWith("'")).toBe(true)
+      })
+  })
+
+  it("neutralizes formulas before applying CSV quoting", () => {
+    expect(rowsToCsv(["Name"], [['=HYPERLINK("http://x","a,b")']])).toBe('Name\r\n"\'=HYPERLINK(""http://x"",""a,b"")"')
+  })
+
+  it("leaves ordinary values untouched", () => {
+    const csv = rowsToCsv(["A"], [["ABC"], ["123"], ["Ayşe Çağrı Öğüt"], ["a@b.com"], ["10 Ağu 2026"], ["—"]])
+    expect(csv).toBe("A\r\nABC\r\n123\r\nAyşe Çağrı Öğüt\r\na@b.com\r\n10 Ağu 2026\r\n—")
+  })
 })
 
 // An .xlsx file is a ZIP of XML parts. Walking the local file headers keeps the assertions on the
