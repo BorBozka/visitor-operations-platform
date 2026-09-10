@@ -8,6 +8,8 @@ uygulaması.
 
 ## Güncel durum
 
+Projenin geliştirme ve teknik audit süreci tamamlandı. Uygulama development/test MSSQL ortamında doğrulandı; production deployment bu proje kapsamında gerçekleştirilmedi.
+
 Frontend yalnız Fastify/Prisma/MSSQL backend'ine HTTP adaptörleri üzerinden bağlanır; backend
 erişilemezse in-memory servislere sessiz fallback yapmaz. Backend LOCAL kimlik doğrulama,
 server-side rol/kapsam
@@ -290,4 +292,4 @@ credential'ları commit edilmez.
   göstergedir.
 - Mal hareketleri ve araç planlama, ziyaret yaşam döngüsünden ayrı operasyon modülleridir.
 - Public cloud backend/MSSQL deployment, Docker, CI/CD ve IIS/Nginx/reverse-proxy altyapısı bu
-  repository cleanup kapsamına dahil değildir.
+  proje kapsamına dahil değildir.
