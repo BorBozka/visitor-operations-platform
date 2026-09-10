@@ -1,6 +1,6 @@
 # Kurumsal Ziyaretçi ve Operasyon Yönetim Sistemi
 
-B-PLAS için geliştirdiğim çok şirketli ve çok tesisli yapılarda ziyaret planlama, giriş-çıkış operasyonları, kaynak
+BPLAS A.Ş. için geliştirdiğim çok şirketli ve çok tesisli yapılarda ziyaret planlama, giriş-çıkış operasyonları, kaynak
 atama ve yönetici raporlamasını ortak bir çalışma alanında birleştiren rol tabanlı web
 uygulaması.
 
