@@ -5,7 +5,7 @@ import type { AuthGuards } from "../../auth/auth-guards.js"
 import type { ApplicationRole, SessionUser } from "../../auth/auth-types.js"
 import type { EmailSender } from "../../delivery/email-sender.js"
 import { ApiError } from "../../lib/api-error.js"
-import { VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { NoActiveVisitorRuleError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { registerVisitorOperationsRoutes } from "./routes.js"
 import { VisitorOperationsService } from "./service.js"
 import type { MeetingDto, VisitDto, VisitorCardDto } from "./types.js"
@@ -54,6 +54,49 @@ afterEach(async () => {
 })
 
 describe("visitor-card lifecycle HTTP conflicts", () => {
+  const unplannedPayload = { firstName: "Ada", lastName: "Yılmaz", company: "Acme", hostEmployeeName: "Serbest Ev Sahibi", visitTypeId: "type-1", durationMinutes: 30, visitorCardId: "card-1", rulesAccepted: true, companyId: "company-1", facilityId: "facility-1" }
+
+  it("keeps unplanned create/check-in successful when the repository finds an active rule", async () => {
+    const app = await createApp("SECURITY", {
+      findEmployeeByUserId: async () => ({ id: "employee-1", userId: "security-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      findVisitType: async () => ({ id: "type-1", name: "Toplantı", active: true, createdAt: at, updatedAt: at }),
+      createUnplanned: async () => checkedIn,
+    })
+
+    const response = await app.inject({ method: "POST", url: "/api/security/unplanned-visits", payload: unplannedPayload })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({ id: "visit-1", status: "CHECKED_IN" })
+  })
+
+  it("returns the existing 409 contract when no active visitor rule exists", async () => {
+    const app = await createApp("SECURITY", {
+      findEmployeeByUserId: async () => ({ id: "employee-1", userId: "security-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      findVisitType: async () => ({ id: "type-1", name: "Toplantı", active: true, createdAt: at, updatedAt: at }),
+      createUnplanned: async () => { throw new NoActiveVisitorRuleError() },
+    })
+
+    const response = await app.inject({ method: "POST", url: "/api/security/unplanned-visits", payload: unplannedPayload })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({ error: { code: "NO_ACTIVE_RULE", message: "Aktif ziyaretçi kuralı bulunmuyor." } })
+    expect(response.body).not.toContain("Missing active")
+  })
+
+  it("keeps an unexpected unplanned repository failure as a sanitized 500", async () => {
+    const app = await createApp("SECURITY", {
+      findEmployeeByUserId: async () => ({ id: "employee-1", userId: "security-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      findVisitType: async () => ({ id: "type-1", name: "Toplantı", active: true, createdAt: at, updatedAt: at }),
+      createUnplanned: async () => { throw new Error("database unavailable") },
+    })
+
+    const response = await app.inject({ method: "POST", url: "/api/security/unplanned-visits", payload: unplannedPayload })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR" } })
+    expect(response.body).not.toContain("database unavailable")
+  })
+
   it("returns 409 for a late return while the Visit is still CHECKED_IN", async () => {
     const app = await createApp("SECURITY", {
       findVisit: async () => checkedIn,

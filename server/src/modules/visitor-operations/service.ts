@@ -4,7 +4,7 @@ import type { DeliveryLogger, EmailSender } from "../../delivery/email-sender.js
 import { consoleDeliveryLogger } from "../../delivery/email-sender.js"
 import { ApiError } from "../../lib/api-error.js"
 import { scopeAllows, type AccessContext } from "../../lib/authorization.js"
-import { CheckInConflictError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { CheckInConflictError, NoActiveVisitorRuleError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import type {
   CreateUnplannedInput, MeetingDto, MeetingInput, PublicPreRegistrationDto, SecurityCheckInInput,
@@ -18,6 +18,7 @@ const securityOperationalStatuses = new Set(["PLANNED", "CHECKED_IN"])
 const notFound = () => new ApiError(404, "NOT_FOUND", "Ziyaret bulunamadı.")
 /** The single public response for an unusable invitation link — never says *why* it is unusable. */
 const invitationNotFound = () => new ApiError(404, "INVITATION_NOT_FOUND", "Davet bağlantısı geçersiz veya süresi dolmuş.")
+const noActiveRule = () => new ApiError(409, "NO_ACTIVE_RULE", "Aktif ziyaretçi kuralı bulunmuyor.")
 const mutationForbidden = () =>
   new ApiError(403, "VISIT_MUTATION_FORBIDDEN", "Bu ziyaret grubu üzerinde değişiklik yapma yetkiniz yok.")
 
@@ -205,7 +206,7 @@ export class VisitorOperationsService {
     return this.getPublicPreRegistration(rawToken)
   }
 
-  async acceptPublicRule(rawToken: string, ipAddress?: string) { const found = await this.getActivePublicInvitation(rawToken); if (!found.activeRule) throw new ApiError(409, "NO_ACTIVE_RULE", "Aktif ziyaretçi kuralı bulunmuyor."); return this.runPublicMutation(() => this.repository.acceptPublicRule(hashToken(rawToken), ipAddress)) }
+  async acceptPublicRule(rawToken: string, ipAddress?: string) { const found = await this.getActivePublicInvitation(rawToken); if (!found.activeRule) throw noActiveRule(); try { return await this.runPublicMutation(() => this.repository.acceptPublicRule(hashToken(rawToken), ipAddress)) } catch (error) { if (error instanceof NoActiveVisitorRuleError) throw noActiveRule(); throw error } }
 
   /**
    * The checks above run on a snapshot; the repository re-validates the persisted Visit and
@@ -309,6 +310,7 @@ export class VisitorOperationsService {
       return await this.repository.createUnplanned(clean, actor.id, this.now())
     } catch (error) {
       if (error instanceof CheckInConflictError) throw new ApiError(409, "CHECK_IN_CONFLICT", "Ziyaret veya kart durumu değişti. Güncel durumu kontrol edip yeniden deneyin.")
+      if (error instanceof NoActiveVisitorRuleError) throw noActiveRule()
       throw error
     }
   }

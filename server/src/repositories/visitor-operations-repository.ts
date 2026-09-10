@@ -25,6 +25,13 @@ export class CheckInConflictError extends Error {
   }
 }
 
+export class NoActiveVisitorRuleError extends Error {
+  constructor() {
+    super("Missing active visitor rule.")
+    this.name = "NoActiveVisitorRuleError"
+  }
+}
+
 export type VisitorCardConflictReason = "CARD_STATE_CHANGED" | "INVALID_CHECKOUT_STATE" | "INVALID_CARD_ASSIGNMENT" | "INVALID_LATE_RETURN_STATE"
 
 export class VisitorCardConflictError extends Error {
@@ -312,7 +319,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
     return withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
       const visit = await findActivePublicVisit(tx, tokenHash)
       const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } })
-      if (!rule) throw new Error("Missing active rule.")
+      if (!rule) throw new NoActiveVisitorRuleError()
       const existing = await tx.visitRuleAcceptance.findUnique({ where: { visitId_visitorRuleVersionId: { visitId: visit.id, visitorRuleVersionId: rule.id } } })
       const row = existing ?? await tx.visitRuleAcceptance.create({ data: { visitId: visit.id, visitorId: visit.visitorId, visitorRuleVersionId: rule.id, ruleVersion: rule.version, acceptedAt: new Date(), method: "INVITATION_LINK", contentSnapshot: rule.content, integrityHash: null, ipAddress: ipAddress ?? null } })
       return { id: row.id, ruleId: row.visitorRuleVersionId, ruleVersion: row.ruleVersion, acceptedAt: row.acceptedAt.toISOString(), method: parseEnum(ruleAcceptanceMethods, row.method, "rule acceptance method"), contentSnapshot: row.contentSnapshot }
@@ -420,7 +427,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
       id = await this.prisma.$transaction(async (tx) => {
         const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } })
         const card = await tx.visitorCard.findUnique({ where: { id: input.visitorCardId } })
-        if (!rule) throw new Error("Missing active rule.")
+        if (!rule) throw new NoActiveVisitorRuleError()
         if (!card || card.status !== "AVAILABLE" || card.currentVisitId !== null) throw new CheckInConflictError()
         const visitor = await tx.visitor.create({ data: { firstName: input.firstName, lastName: input.lastName, company: input.company } })
         const meeting = await tx.meeting.create({ data: { creatorEmployeeId, visitTypeId: input.visitTypeId, hostEmployeeId: null, hostEmployeeName: input.hostEmployeeName, hostCompanyId: input.companyId, facilityId: input.facilityId, plannedStart: now, plannedEnd: new Date(now.getTime() + input.durationMinutes * 60_000), hasAdditionalRequirements: false } })

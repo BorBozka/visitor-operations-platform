@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { AccessContext } from "../../lib/authorization.js"
 import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
-import { CheckInConflictError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
+import { CheckInConflictError, NoActiveVisitorRuleError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
 import type { MeetingDto, MeetingInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
@@ -174,6 +174,32 @@ describe("VisitorOperationsService security delivery boundary", () => {
     const service = new VisitorOperationsService(repository, email, "https://web.example.test", undefined, () => now)
     await service.createAndCheckInUnplanned({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", hostEmployeeName: "Serbest Ev Sahibi", visitTypeId: "type-1", durationMinutes: 30, visitorCardId: "card-1", rulesAccepted: true, companyId: "company-1", facilityId: "facility-1" }, SECURITY_CTX)
     expect(email.messages).toHaveLength(0)
+  })
+
+  it("maps a missing active visitor rule to the existing conflict contract", async () => {
+    const repository = unusedRepository({
+      findEmployeeByUserId: async () => ({ id: "security-1", userId: "user-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      findVisitType: async () => ({ id: "type-1", name: "Toplantı", active: true, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      createUnplanned: async () => { throw new NoActiveVisitorRuleError() },
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.createAndCheckInUnplanned({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", hostEmployeeName: "Serbest Ev Sahibi", visitTypeId: "type-1", durationMinutes: 30, visitorCardId: "card-1", rulesAccepted: true, companyId: "company-1", facilityId: "facility-1" }, SECURITY_CTX)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "NO_ACTIVE_RULE",
+      message: "Aktif ziyaretçi kuralı bulunmuyor.",
+    })
+  })
+
+  it("keeps unrelated unplanned repository errors as unexpected failures", async () => {
+    const repository = unusedRepository({
+      findEmployeeByUserId: async () => ({ id: "security-1", userId: "user-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      findVisitType: async () => ({ id: "type-1", name: "Toplantı", active: true, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      createUnplanned: async () => { throw new Error("database unavailable") },
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await expect(service.createAndCheckInUnplanned({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", hostEmployeeName: "Serbest Ev Sahibi", visitTypeId: "type-1", durationMinutes: 30, visitorCardId: "card-1", rulesAccepted: true, companyId: "company-1", facilityId: "facility-1" }, SECURITY_CTX)).rejects.toThrow("database unavailable")
   })
 
   it("maps a concurrent check-in loser to a safe conflict", async () => {
