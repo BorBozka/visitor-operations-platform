@@ -7,7 +7,7 @@ import { loadConfig } from "./config/env.js"
 import { ApiError } from "./lib/api-error.js"
 
 /**
- * The global error handler's HTTP contract (NEW-11).
+ * The global error handler's HTTP contract (NEW-11, NEW-12).
  *
  * `@fastify/rate-limit` writes its `retry-after`/`x-ratelimit-*` headers onto the reply and then
  * throws a plain `Error` carrying only `statusCode: 429`. Because that error is not an `ApiError`,
@@ -15,6 +15,11 @@ import { ApiError } from "./lib/api-error.js"
  * but the status/body wrong — so the frontend's `status === 429` classification never fired at
  * runtime. The handler now maps 429 explicitly while still collapsing genuinely unexpected
  * exceptions into the generic 500 envelope.
+ *
+ * Fastify's own body-parser and content-type errors (NEW-12) hit the same handler before any route
+ * or Zod schema runs, carrying a real client status the app used to discard. Only the named
+ * framework codes below are mapped, and only when the status they carry matches the one pinned for
+ * that code — an arbitrary `statusCode` on an exception is still no contract.
  */
 
 const databaseUrl = "sqlserver://localhost:1433;database=visitor_operations;user=sa;password=placeholder;encrypt=true;trustServerCertificate=true"
@@ -119,6 +124,60 @@ describe("global error handler", () => {
 
     expect(response.statusCode).toBe(500)
     expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
+  })
+
+  it("still sanitizes an error that borrows a framework code but not its status", async () => {
+    const app = await buildApp(configFor(), { authRepository: new InMemoryAuthRepository() })
+    apps.push(app)
+    app.get("/api/testing/spoofed", async () => {
+      const error = new Error("internal detail") as Error & { code: string; statusCode: number }
+      error.code = "FST_ERR_CTP_INVALID_MEDIA_TYPE"
+      error.statusCode = 500
+      throw error
+    })
+
+    const response = await app.inject({ method: "GET", url: "/api/testing/spoofed" })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
+  })
+
+  it("answers an unsupported request content type with 415 and a safe body", async () => {
+    const app = await loginApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "content-type": "application/xml" },
+      payload: "<login><username>calisan</username></login>",
+    })
+
+    expect(response.statusCode).toBe(415)
+    expect(response.json()).toEqual({ error: { code: "UNSUPPORTED_MEDIA_TYPE", message: "İstek içerik türü desteklenmiyor." } })
+    expect(response.body).not.toContain("FST_ERR")
+    expect(response.body).not.toContain("application/xml")
+    expect(response.body).not.toContain("stack")
+    expect(response.body).not.toContain("fastify")
+    expect(response.body).not.toContain("node_modules")
+  })
+
+  it("answers a request body over the body limit with 413 and a safe body", async () => {
+    const app = await loginApp()
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ username: "calisan", password: "x".repeat(1_048_576) }),
+    })
+
+    expect(response.statusCode).toBe(413)
+    expect(response.json()).toEqual({ error: { code: "PAYLOAD_TOO_LARGE", message: "İstek gövdesi izin verilen boyuttan büyük." } })
+    expect(response.body).not.toContain("FST_ERR")
+    expect(response.body).not.toContain("xxxx")
+    expect(response.body).not.toContain("stack")
+    expect(response.body).not.toContain("fastify")
+    expect(response.body).not.toContain("node_modules")
   })
 
   it("keeps forwarding the application's own ApiError statuses untouched", async () => {

@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import { createAuthGuards } from "./auth/auth-guards.js"
 import { AuthService } from "./auth/auth-service.js"
 import type { AppConfig } from "./config/env.js"
-import { ApiError, rateLimitedError } from "./lib/api-error.js"
+import { ApiError, payloadTooLargeError, rateLimitedError, unsupportedMediaTypeError } from "./lib/api-error.js"
 import { registerAccountRoutes } from "./modules/account/routes.js"
 import { registerAuthRoutes } from "./modules/auth/routes.js"
 import { registerHealthRoutes } from "./modules/health/routes.js"
@@ -43,6 +43,25 @@ function isRateLimitError(error: unknown): boolean {
   return error instanceof Error && (error as { statusCode?: unknown }).statusCode === 429
 }
 
+/**
+ * Fastify's own content-type/body parsing errors, raised before any route or Zod schema runs.
+ * Each entry pins the framework `code` to the status Fastify 5 documents for it, so a code whose
+ * carried `statusCode` does not match the expected one falls through to the generic 500 instead of
+ * letting an error object dictate the response status.
+ */
+const FRAMEWORK_CLIENT_ERRORS: Record<string, { statusCode: number; toApiError: () => ApiError }> = {
+  FST_ERR_CTP_BODY_TOO_LARGE: { statusCode: 413, toApiError: payloadTooLargeError },
+  FST_ERR_CTP_INVALID_MEDIA_TYPE: { statusCode: 415, toApiError: unsupportedMediaTypeError },
+}
+
+function frameworkClientError(error: unknown): ApiError | null {
+  if (!(error instanceof Error)) return null
+  const { code, statusCode } = error as { code?: unknown; statusCode?: unknown }
+  if (typeof code !== "string") return null
+  const mapping = FRAMEWORK_CLIENT_ERRORS[code]
+  return mapping && statusCode === mapping.statusCode ? mapping.toApiError() : null
+}
+
 export interface AppDependencies {
   authRepository: AuthRepository
   organizationRepository?: OrganizationRepository
@@ -75,12 +94,15 @@ export async function buildApp(config: AppConfig, dependencies: AppDependencies)
 
   // `@fastify/rate-limit` raises a throttled request as a plain `Error` carrying only
   // `statusCode: 429` — never an `ApiError` — so it would otherwise be sanitized into a generic
-  // 500 and the client would see a server fault instead of a throttle. Map that one framework
-  // status explicitly onto the app's own envelope; the plugin's `retry-after`/`x-ratelimit-*`
-  // headers are already on the reply and are left untouched. Every other non-`ApiError` stays
-  // generic: the status a stray exception happens to carry is not a contract we vouch for.
+  // 500 and the client would see a server fault instead of a throttle. Fastify's own body-parser
+  // and content-type errors have the same problem: they are raised before the route (and its Zod
+  // schema) ever runs, and carry a genuine client status the app was discarding. Both are mapped
+  // onto the app's own envelope through explicit allow-lists — the rate-limit status, and the
+  // named framework error codes above; the plugin's `retry-after`/`x-ratelimit-*` headers are
+  // already on the reply and are left untouched. Every other non-`ApiError` stays generic: the
+  // status a stray exception happens to carry is not a contract we vouch for.
   app.setErrorHandler((error, request, reply) => {
-    const handled = error instanceof ApiError ? error : isRateLimitError(error) ? rateLimitedError() : null
+    const handled = error instanceof ApiError ? error : isRateLimitError(error) ? rateLimitedError() : frameworkClientError(error)
     if (handled) return reply.status(handled.statusCode).send({ error: { code: handled.code, message: handled.message } })
     request.log.error(error)
     return reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
