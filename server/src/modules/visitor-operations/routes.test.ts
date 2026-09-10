@@ -97,6 +97,25 @@ describe("visitor-card lifecycle HTTP conflicts", () => {
     expect(response.body).not.toContain("database unavailable")
   })
 
+  it("rejects meeting-level visit type fields on the per-visitor correction route", async () => {
+    const app = await createApp("SECURITY", { findVisit: async () => checkedIn })
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/security/visits/visit-1/correction",
+      payload: {
+        firstName: "Ada",
+        lastName: "Yılmaz",
+        company: "Acme",
+        hostEmployeeName: "Maya Kara",
+        visitTypeId: "type-2",
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({ error: { code: "VALIDATION_ERROR", message: "Geçersiz istek gövdesi." } })
+  })
+
   it("returns 409 for a late return while the Visit is still CHECKED_IN", async () => {
     const app = await createApp("SECURITY", {
       findVisit: async () => checkedIn,

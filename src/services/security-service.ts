@@ -46,8 +46,6 @@ export interface SecurityVisitorCorrectionInput {
   email?: string
   company: string
   phone?: string
-  /** Meeting-level visit type. A correction updates every visit sharing the meeting. */
-  visitTypeId?: string
   /**
    * Free-text host display name. When it differs from the current value the parent Meeting's
    * hostEmployeeName is updated and hostCorrectedFrom/At/By audit fields are written on the
@@ -91,8 +89,7 @@ export interface SecurityService {
    * the host *display name* when it is wrong. Allowed for PLANNED and CHECKED_IN visits only;
    * rejected for terminal visits. A host-name change updates the parent Meeting's
    * hostEmployeeName and records hostCorrectedFrom/At/By on the visit; hostEmployeeId, visit
-   * facility, schedule and invitation metadata are never touched. A visit-type correction
-   * updates the parent Meeting and therefore every Visit projection sharing that meeting.
+   * facility, schedule and invitation metadata are never touched.
    */
   correctVisitor(visitId: string, input: SecurityVisitorCorrectionInput): Promise<Visit>
 }

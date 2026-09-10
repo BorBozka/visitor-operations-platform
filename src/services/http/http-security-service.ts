@@ -74,7 +74,6 @@ export class HttpSecurityService implements SecurityService {
         email: input.email,
         company: input.company,
         phone: input.phone,
-        visitTypeId: input.visitTypeId,
         hostEmployeeName: input.hostEmployeeName,
       }),
     )

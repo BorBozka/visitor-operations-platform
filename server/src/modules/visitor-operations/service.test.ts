@@ -5,7 +5,7 @@ import type { EmailMessage, EmailSender } from "../../delivery/email-sender.js"
 import { CheckInConflictError, NoActiveVisitorRuleError, PublicInvitationInactiveError, VisitorCardConflictError, type VisitorOperationsRepository } from "../../repositories/visitor-operations-repository.js"
 import { assertMeetingPlanningUnlocked } from "./meeting-planning-lock.js"
 import { VisitorOperationsService, hashToken } from "./service.js"
-import type { MeetingDto, MeetingInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
+import type { MeetingDto, MeetingInput, SecurityCorrectionInput, VisitDto, VisitorCardDto, VisitorRuleDto, VisitStatus } from "./types.js"
 
 const now = new Date("2026-09-02T10:00:00.000Z")
 const scope = { companyIds: ["company-1"], facilityIds: [], securityGateIds: [] }
@@ -291,6 +291,24 @@ describe("Visitor operations state guards", () => {
 
     await expect(service.checkOutVisit("visit-1", true, SECURITY_CTX)).rejects.toMatchObject({ statusCode: 409, code: "CARD_ASSIGNMENT_CONFLICT" })
     await expect(service.receiveLateCardReturn("visit-1", SECURITY_CTX)).rejects.toMatchObject({ statusCode: 409, code: "INVALID_CARD_TRANSITION" })
+  })
+})
+
+describe("Visitor correction scope", () => {
+  it("forwards visitor fields and the permitted host display-name correction without visit type", async () => {
+    let submitted: SecurityCorrectionInput | undefined
+    const current = visit({ status: "CHECKED_IN" })
+    const repository = unusedRepository({
+      findVisit: async () => current,
+      findEmployeeByUserId: async () => ({ id: "security-1", userId: "user-1", fullName: "Güvenlik", companyId: "company-1", facilityIds: ["facility-1"] }),
+      correctVisitor: async (_id: string, input: SecurityCorrectionInput) => { submitted = input },
+    })
+    const service = new VisitorOperationsService(repository, new FakeEmailSender(), "https://web.example.test", undefined, () => now)
+
+    await service.correctVisitor("visit-1", { firstName: " Ada ", lastName: "Yılmaz", company: " Acme ", phone: " 555 ", hostEmployeeName: " Yeni Ev Sahibi " }, SECURITY_CTX)
+
+    expect(submitted).toEqual({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", email: undefined, phone: "555", hostEmployeeName: "Yeni Ev Sahibi" })
+    expect(submitted).not.toHaveProperty("visitTypeId")
   })
 })
 

@@ -93,7 +93,7 @@ export interface MeetingInput {
 }
 
 export interface SecurityCheckInInput { visitorCardId: string; vehiclePlate?: string; phone?: string }
-export interface SecurityCorrectionInput { firstName: string; lastName: string; email?: string; company: string; phone?: string; visitTypeId?: string; hostEmployeeName: string }
+export interface SecurityCorrectionInput { firstName: string; lastName: string; email?: string; company: string; phone?: string; hostEmployeeName: string }
 export interface CreateUnplannedInput {
   firstName: string; lastName: string; company: string; hostEmployeeName: string; visitTypeId: string
   vehiclePlate?: string; durationMinutes: number; visitorCardId: string; rulesAccepted: boolean; companyId: string; facilityId: string

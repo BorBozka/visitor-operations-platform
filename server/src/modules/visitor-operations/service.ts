@@ -317,9 +317,8 @@ export class VisitorOperationsService {
   async correctVisitor(id: string, input: SecurityCorrectionInput, ctx: AccessContext) {
     const visit = await this.requireVisit(id); this.assertOperationalScope(ctx, visit.meeting); if (!["PLANNED", "CHECKED_IN"].includes(visit.status)) throw new ApiError(409, "VISIT_NOT_EDITABLE", "Yalnızca planlanmış veya içerideki ziyaretler düzeltilebilir.")
     const email = input.email === undefined ? undefined : normalizeOptional(input.email); if (email && !validEmail(email)) throw new ApiError(400, "VALIDATION_ERROR", "Geçerli bir e-posta adresi girin.")
-    if (input.visitTypeId) { const type = await this.requireVisitType(input.visitTypeId); if (!type.active && type.id !== visit.meeting.visitTypeId) throw new ApiError(409, "INACTIVE_VISIT_TYPE", "Pasif ziyaret türü seçilemez.") }
     const actor = await this.repository.findEmployeeByUserId(ctx.userId)
-    await this.repository.correctVisitor(id, { firstName: requireText(input.firstName, "Ad zorunludur."), lastName: requireText(input.lastName, "Soyad zorunludur."), company: requireText(input.company, "Ziyaretçi şirketi zorunludur."), email, phone: normalizeOptional(input.phone), visitTypeId: input.visitTypeId?.trim() || undefined, hostEmployeeName: requireText(input.hostEmployeeName, "Ev sahibi zorunludur.") }, actor, this.now())
+    await this.repository.correctVisitor(id, { firstName: requireText(input.firstName, "Ad zorunludur."), lastName: requireText(input.lastName, "Soyad zorunludur."), company: requireText(input.company, "Ziyaretçi şirketi zorunludur."), email, phone: normalizeOptional(input.phone), hostEmployeeName: requireText(input.hostEmployeeName, "Ev sahibi zorunludur.") }, actor, this.now())
     return this.requireVisit(id)
   }
 

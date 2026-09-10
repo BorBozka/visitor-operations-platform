@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client"
 import { describe, expect, it, vi } from "vitest"
 
-import type { MeetingInput } from "../modules/visitor-operations/types.js"
+import type { MeetingInput, SecurityCorrectionInput } from "../modules/visitor-operations/types.js"
 import { CheckInConflictError, PrismaVisitorOperationsRepository, PublicInvitationInactiveError, VisitorCardConflictError } from "./visitor-operations-repository.js"
 
 const sentAt = new Date("2026-09-02T08:00:00.000Z")
@@ -329,6 +329,27 @@ describe("PrismaVisitorOperationsRepository shared planning invariant", () => {
       statusCode: 409,
       code: "MEETING_PLANNING_CONFLICT",
     })
+  })
+})
+
+describe("PrismaVisitorOperationsRepository security correction scope", () => {
+  it("updates only the selected visitor and preserves the meeting visit type for siblings", async () => {
+    const fixture = createMeetingFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    const input: SecurityCorrectionInput = {
+      firstName: "Ada Düzeltilmiş",
+      lastName: "Yılmaz",
+      company: "Acme",
+      hostEmployeeName: fixture.meeting.hostEmployeeName,
+    }
+
+    await repository.correctVisitor("visit-planned", input, null, updatedAt)
+
+    expect(fixture.planned.visitor).toMatchObject({ firstName: "Ada Düzeltilmiş", lastName: "Yılmaz" })
+    expect(fixture.second.visitor).toMatchObject({ firstName: "Deniz", lastName: "Yılmaz" })
+    expect(fixture.meeting.visitTypeId).toBe("type-1")
+    expect(fixture.second.meeting.visitTypeId).toBe("type-1")
+    expect(fixture.meetingUpdate).toHaveBeenCalledWith({ where: { id: "meeting-1" }, data: {} })
   })
 })
 
