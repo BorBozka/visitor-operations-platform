@@ -365,13 +365,13 @@ describe("Meeting shared planning invariant", () => {
 /**
  * The public pre-registration surface. The service's own `getActivePublicInvitation` pre-check
  * runs on a snapshot, so this fake repository behaves like the real one: every public write
- * re-validates the *persisted* visit status inside its transaction and rejects with
- * `PublicInvitationInactiveError` when the visit has left `PLANNED`. `beforeWrite` lets a test
- * commit a cancel / check-in in exactly the window the old code wrote through.
+ * re-validates the *persisted* visit and invitation state inside its transaction and rejects with
+ * `PublicInvitationInactiveError` unless they remain `PLANNED` and `SENT`. `beforeWrite` lets a
+ * test commit a cancel, check-in, or invitation reset in exactly the window the old code wrote through.
  */
 function publicInvitationFixture(options: { activeRule?: VisitorRuleDto | null } = {}) {
   const activeRule = options.activeRule === undefined ? { id: "rule-1", version: 2, content: "Ziyaretçi kuralı", publishedAt: now.toISOString(), active: true } : options.activeRule
-  const state = { status: "PLANNED" as VisitStatus, visitor: visit().visitor, vehiclePlate: undefined as string | undefined, acceptances: 0 }
+  const state = { status: "PLANNED" as VisitStatus, invitationStatus: "SENT" as VisitDto["invitationStatus"], visitor: visit().visitor, vehiclePlate: undefined as string | undefined, acceptances: 0 }
   const tokenHashes: string[] = []
   let beforeNextWrite: (() => void) | undefined
   let writeFailure: Error | undefined
@@ -379,13 +379,13 @@ function publicInvitationFixture(options: { activeRule?: VisitorRuleDto | null }
     beforeNextWrite?.()
     beforeNextWrite = undefined
     if (writeFailure) throw writeFailure
-    if (state.status !== "PLANNED") throw new PublicInvitationInactiveError()
+    if (state.status !== "PLANNED" || state.invitationStatus !== "SENT") throw new PublicInvitationInactiveError()
   }
   const repository = unusedRepository({
     findPublicPreRegistration: async (tokenHash: string) => {
       tokenHashes.push(tokenHash)
       if (tokenHash !== hashToken("public-token")) return null
-      return { visit: visit({ status: state.status, visitor: state.visitor, vehiclePlate: state.vehiclePlate }), activeRule }
+      return { visit: visit({ status: state.status, invitationStatus: state.invitationStatus, visitor: state.visitor, vehiclePlate: state.vehiclePlate }), activeRule }
     },
     updatePublicVisitor: async (tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }) => {
       tokenHashes.push(tokenHash)
@@ -452,6 +452,26 @@ describe("VisitorOperationsService public invitation mutations", () => {
     await expect(fixture.service.acceptPublicRule("public-token")).rejects.toMatchObject(invitationNotFoundBody)
     await expect(fixture.service.getPublicPreRegistration("public-token")).rejects.toMatchObject(invitationNotFoundBody)
     expect(fixture.state.acceptances).toBe(0)
+  })
+
+  it.each(["NOT_SENT", "SENDING", "FAILED"] as const)("refuses every public operation when invitation state is %s", async (invitationStatus) => {
+    const fixture = publicInvitationFixture()
+    fixture.state.invitationStatus = invitationStatus
+
+    await expect(fixture.service.getPublicPreRegistration("public-token")).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).rejects.toMatchObject(invitationNotFoundBody)
+    await expect(fixture.service.acceptPublicRule("public-token")).rejects.toMatchObject(invitationNotFoundBody)
+    expect(fixture.state.visitor).toMatchObject({ firstName: "Ada", company: "Acme" })
+    expect(fixture.state.acceptances).toBe(0)
+  })
+
+  it("maps an invitation reset after the public pre-check onto the public 404", async () => {
+    const fixture = publicInvitationFixture()
+    fixture.beforeWrite(() => { fixture.state.invitationStatus = "NOT_SENT" })
+
+    await expect(fixture.service.updatePublicPreRegistration("public-token", publicInput)).rejects.toMatchObject(invitationNotFoundBody)
+    expect(fixture.state.visitor).toMatchObject({ firstName: "Ada", company: "Acme" })
+    expect(fixture.state.vehiclePlate).toBeUndefined()
   })
 
   it("keeps hiding an unknown token behind the same 404", async () => {

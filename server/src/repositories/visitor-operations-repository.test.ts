@@ -126,13 +126,16 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
     invitationError: "historical second error",
   }
   meeting.visits = [planned, second]
-  const invitation = { visitId: planned.id, tokenHash: "existing-token-hash" }
+  let invitation: { visitId: string; tokenHash: string } | null = { visitId: planned.id, tokenHash: "existing-token-hash" }
 
   const meetingUpdate = vi.fn(async ({ data }: { data: Partial<FixtureMeeting> }) => Object.assign(meeting, data))
-  const visitUpdateMany = vi.fn(async ({ where, data }: { where: { meetingId: string; status: string }; data: Partial<FixtureVisit> }) => {
+  const visitUpdateMany = vi.fn(async ({ where, data }: { where: { meetingId?: string; status?: string; id?: string; invitationStatus?: string | { in: string[] } }; data: Partial<FixtureVisit> }) => {
     let count = 0
     for (const visit of meeting.visits) {
-      if (visit.meetingId === where.meetingId && visit.status === where.status) {
+      const invitationStatusMatches = typeof where.invitationStatus === "string"
+        ? visit.invitationStatus === where.invitationStatus
+        : where.invitationStatus === undefined || where.invitationStatus.in.includes(visit.invitationStatus)
+      if ((where.meetingId === undefined || visit.meetingId === where.meetingId) && (where.status === undefined || visit.status === where.status) && (where.id === undefined || visit.id === where.id) && invitationStatusMatches) {
         Object.assign(visit, data)
         count += 1
       }
@@ -141,6 +144,19 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
   })
   const tx = {
     meeting: { update: meetingUpdate },
+    invitation: {
+      findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => invitation?.tokenHash === where.tokenHash ? { ...invitation, visit: planned } : null),
+      deleteMany: vi.fn(async ({ where }: { where: { visit: { meetingId: string; status: string } } }) => {
+        const invitedVisit = meeting.visits.find((visit) => visit.id === invitation?.visitId)
+        if (!invitation || invitedVisit?.meetingId !== where.visit.meetingId || invitedVisit.status !== where.visit.status) return { count: 0 }
+        invitation = null
+        return { count: 1 }
+      }),
+      upsert: vi.fn(async ({ where, create, update }: { where: { visitId: string }; create: { visitId: string; tokenHash: string }; update: { tokenHash: string } }) => {
+        invitation = invitation?.visitId === where.visitId ? { ...invitation, ...update } : create
+        return invitation
+      }),
+    },
     visit: {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => meeting.visits.find((visit) => visit.id === where.id) ?? null),
       findMany: vi.fn(async ({ where }: { where: { meetingId: string } }) => meeting.visits.filter((visit) => visit.meetingId === where.meetingId).map((visit) => ({ status: visit.status }))),
@@ -156,10 +172,13 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
   }
   const prisma = {
     $transaction: vi.fn(async (operation: (client: typeof tx) => Promise<unknown>) => operation(tx)),
+    invitation: { findUnique: tx.invitation.findUnique },
     meeting: { findUnique: vi.fn(async () => meeting) },
+    visit: { findUnique: tx.visit.findUnique, updateMany: visitUpdateMany },
+    visitorRuleVersion: { findFirst: vi.fn(async () => null) },
   } as unknown as PrismaClient
 
-  return { invitation, meeting, meetingUpdate, planned, prisma, second, visitUpdateMany }
+  return { invitation: () => invitation, invitationDeleteMany: tx.invitation.deleteMany, meeting, meetingUpdate, planned, prisma, second, visitUpdateMany }
 }
 
 const meetingInput: MeetingInput = {
@@ -177,11 +196,20 @@ const meetingInput: MeetingInput = {
 }
 
 describe("PrismaVisitorOperationsRepository invitation resets", () => {
-  it("resets planned invitations atomically with a meeting edit and preserves the token", async () => {
+  it("revokes the old token atomically when a meeting edit replaces visitor identity", async () => {
     const fixture = createMeetingFixture()
     const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    const replacementInput: MeetingInput = {
+      ...meetingInput,
+      visitors: [
+        { visitId: "visit-planned", firstName: "Bora", lastName: "Demir", email: "bora@example.test", company: "Beta", phone: "5550000000" },
+        meetingInput.visitors[1],
+      ],
+    }
 
-    const result = await repository.updateMeeting("meeting-1", meetingInput, "host-1")
+    await expect(repository.findPublicPreRegistration("existing-token-hash")).resolves.toMatchObject({ visit: { visitor: { firstName: "Ada", email: "ada@example.test", company: "Acme" }, invitationStatus: "SENT" } })
+
+    const result = await repository.updateMeeting("meeting-1", replacementInput, "host-1")
 
     for (const id of ["visit-planned", "visit-second"]) {
       expect(result.visits.find((visit) => visit.id === id)).toMatchObject({
@@ -190,11 +218,22 @@ describe("PrismaVisitorOperationsRepository invitation resets", () => {
         invitationError: undefined,
       })
     }
-    expect(fixture.invitation).toEqual({ visitId: "visit-planned", tokenHash: "existing-token-hash" })
+    expect(result.visits.find((visit) => visit.id === "visit-planned")?.visitor).toMatchObject({ firstName: "Bora", lastName: "Demir", email: "bora@example.test", company: "Beta", phone: "5550000000" })
+    expect(fixture.invitation()).toBeNull()
+    expect(fixture.invitationDeleteMany).toHaveBeenCalledWith({ where: { visit: { meetingId: "meeting-1", status: "PLANNED" } } })
     expect(fixture.visitUpdateMany).toHaveBeenCalledWith({
       where: { meetingId: "meeting-1", status: "PLANNED" },
       data: { invitationStatus: "NOT_SENT", invitationSentAt: null, invitationError: null },
     })
+
+    await expect(repository.findPublicPreRegistration("existing-token-hash")).resolves.toBeNull()
+    const prepared = await repository.prepareInvitation("visit-planned", "replacement-token-hash")
+    expect(prepared.claimed).toBe(true)
+    await repository.finishInvitation("visit-planned", true, updatedAt)
+    await expect(repository.findPublicPreRegistration("replacement-token-hash")).resolves.toMatchObject({ visit: { visitor: { firstName: "Bora", lastName: "Demir", email: "bora@example.test", company: "Beta", phone: "5550000000" }, invitationStatus: "SENT" } })
+    await expect(repository.findPublicPreRegistration("existing-token-hash")).resolves.toBeNull()
+    await expect(repository.updatePublicVisitor("existing-token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+    await expect(repository.acceptPublicRule("existing-token-hash")).rejects.toBeInstanceOf(PublicInvitationInactiveError)
   })
 
   it("resets a sent planned invitation atomically with rescheduling", async () => {
@@ -208,6 +247,21 @@ describe("PrismaVisitorOperationsRepository invitation resets", () => {
     expect(fixture.meeting).toMatchObject({ plannedStart: nextStart, plannedEnd: nextEnd })
     expect(fixture.planned).toMatchObject({ invitationStatus: "NOT_SENT", invitationSentAt: null, invitationError: null })
     expect(fixture.second).toMatchObject({ invitationStatus: "NOT_SENT", invitationSentAt: null, invitationError: null })
+    expect(fixture.invitation()).toBeNull()
+    expect(fixture.invitationDeleteMany).toHaveBeenCalledWith({ where: { visit: { meetingId: "meeting-1", status: "PLANNED" } } })
+    expect(fixture.prisma.$transaction).toHaveBeenCalledOnce()
+  })
+
+  it("revokes planned invitations when the existing lifecycle extension reset runs", async () => {
+    const fixture = createMeetingFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    const nextEnd = new Date("2026-09-03T10:30:00.000Z")
+
+    await repository.extendMeetingTimes("meeting-1", fixture.meeting.plannedStart, nextEnd)
+
+    expect(fixture.meeting.plannedEnd).toEqual(nextEnd)
+    expect(fixture.planned.invitationStatus).toBe("NOT_SENT")
+    expect(fixture.invitation()).toBeNull()
     expect(fixture.prisma.$transaction).toHaveBeenCalledOnce()
   })
 })
@@ -499,9 +553,9 @@ interface FixtureAcceptance { id: string; visitId: string; visitorId: string; vi
  * Public pre-registration fixture. `$transaction` snapshots and restores the mutable rows so a
  * throw inside it behaves like a real rollback — which is what the TOCTOU guard relies on.
  */
-function createPublicInvitationFixture(options: { visitStatus?: string; activeRule?: FixtureRule | null } = {}) {
+function createPublicInvitationFixture(options: { visitStatus?: string; invitationStatus?: string; activeRule?: FixtureRule | null } = {}) {
   const visitor = { id: "visitor-1", firstName: "Ada", lastName: "Yılmaz", email: "ada@example.test" as string | null, company: "Acme", phone: null as string | null }
-  const visit = { id: "visit-1", visitorId: visitor.id, status: options.visitStatus ?? "PLANNED", vehiclePlate: null as string | null }
+  const visit = { id: "visit-1", visitorId: visitor.id, status: options.visitStatus ?? "PLANNED", invitationStatus: options.invitationStatus ?? "SENT", vehiclePlate: null as string | null }
   const rule = options.activeRule === undefined ? { id: "rule-1", version: 3, content: "Ziyaretçi kuralı" } : options.activeRule
   let acceptances: FixtureAcceptance[] = []
   let beforeNextVisitWrite: (() => void) | undefined
@@ -509,12 +563,12 @@ function createPublicInvitationFixture(options: { visitStatus?: string; activeRu
   let failAcceptanceCreate = false
 
   const tx = {
-    invitation: { findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => where.tokenHash === "token-hash" ? { visitId: visit.id, tokenHash: where.tokenHash, visit: { id: visit.id, status: visit.status, visitorId: visit.visitorId } } : null) },
+    invitation: { findUnique: vi.fn(async ({ where }: { where: { tokenHash: string } }) => where.tokenHash === "token-hash" ? { visitId: visit.id, tokenHash: where.tokenHash, visit: { id: visit.id, status: visit.status, invitationStatus: visit.invitationStatus, visitorId: visit.visitorId } } : null) },
     visit: {
-      updateMany: vi.fn(async ({ where, data }: { where: { id: string; status: string }; data: { vehiclePlate?: string } }) => {
+      updateMany: vi.fn(async ({ where, data }: { where: { id: string; status: string; invitationStatus: string }; data: { vehiclePlate?: string } }) => {
         beforeNextVisitWrite?.()
         beforeNextVisitWrite = undefined
-        if (visit.id !== where.id || visit.status !== where.status) return { count: 0 }
+        if (visit.id !== where.id || visit.status !== where.status || visit.invitationStatus !== where.invitationStatus) return { count: 0 }
         Object.assign(visit, data)
         return { count: 1 }
       }),
@@ -572,7 +626,7 @@ describe("PrismaVisitorOperationsRepository public invitation revalidation", () 
 
     expect(fixture.visitor).toMatchObject({ firstName: "Ada Güncel", lastName: "Yılmaz", company: "Acme A.Ş.", email: "ada.guncel@example.test", phone: "5550000000" })
     expect(fixture.visit.vehiclePlate).toBe("16ABC123")
-    expect(fixture.tx.visit.updateMany).toHaveBeenCalledWith({ where: { id: "visit-1", status: "PLANNED" }, data: { vehiclePlate: "16ABC123" } })
+    expect(fixture.tx.visit.updateMany).toHaveBeenCalledWith({ where: { id: "visit-1", status: "PLANNED", invitationStatus: "SENT" }, data: { vehiclePlate: "16ABC123" } })
   })
 
   it("accepts the active rule for a still-PLANNED visit and stays idempotent", async () => {
@@ -589,6 +643,20 @@ describe("PrismaVisitorOperationsRepository public invitation revalidation", () 
 
   it.each(["CANCELLED", "CHECKED_IN"])("writes nothing when the persisted visit is already %s", async (status) => {
     const fixture = createPublicInvitationFixture({ visitStatus: status })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+
+    await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+    await expect(repository.acceptPublicRule("token-hash")).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada", lastName: "Yılmaz", company: "Acme", email: "ada@example.test", phone: null })
+    expect(fixture.visit.vehiclePlate).toBeNull()
+    expect(fixture.tx.visit.updateMany).not.toHaveBeenCalled()
+    expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
+    expect(fixture.acceptances()).toEqual([])
+  })
+
+  it.each(["NOT_SENT", "SENDING", "FAILED"])("writes nothing when the persisted invitation is %s", async (invitationStatus) => {
+    const fixture = createPublicInvitationFixture({ invitationStatus })
     const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
 
     await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
@@ -619,6 +687,18 @@ describe("PrismaVisitorOperationsRepository public invitation revalidation", () 
     await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
 
     expect(fixture.visit).toMatchObject({ status: "CANCELLED", vehiclePlate: null })
+    expect(fixture.visitor).toMatchObject({ firstName: "Ada", company: "Acme", phone: null })
+    expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
+  })
+
+  it("cannot commit a public visitor write once an invitation reset lands before the compare-and-set", async () => {
+    const fixture = createPublicInvitationFixture()
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    fixture.beforeVisitWrite(() => { fixture.visit.invitationStatus = "NOT_SENT" })
+
+    await expect(repository.updatePublicVisitor("token-hash", publicVisitorInput)).rejects.toBeInstanceOf(PublicInvitationInactiveError)
+
+    expect(fixture.visit).toMatchObject({ status: "PLANNED", invitationStatus: "NOT_SENT", vehiclePlate: null })
     expect(fixture.visitor).toMatchObject({ firstName: "Ada", company: "Acme", phone: null })
     expect(fixture.tx.visitor.update).not.toHaveBeenCalled()
   })

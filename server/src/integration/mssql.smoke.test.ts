@@ -289,7 +289,10 @@ describeMssql.sequential("Phase 1-3 MSSQL smoke", () => {
     const rescheduled = await app.inject({ method: "PATCH", url: `/api/visits/${firstVisit.id}/reschedule`, headers: employeeHeaders, payload: { plannedStart: "2026-10-03T11:00:00.000Z", plannedEnd: "2026-10-03T12:00:00.000Z" } })
     expect(rescheduled.statusCode).toBe(200)
     expect(rescheduled.json()).toMatchObject({ invitationStatus: "NOT_SENT", meeting: { plannedStart: "2026-10-03T11:00:00.000Z", plannedEnd: "2026-10-03T12:00:00.000Z" } })
-    expect(await prisma.invitation.findFirst({ where: { visitId: firstVisit.id } })).toEqual(invitationBeforeReset)
+    expect(await prisma.invitation.findFirst({ where: { visitId: firstVisit.id } })).toBeNull()
+    expect((await app.inject({ method: "GET", url: `/api/public/invitations/${rawToken}` })).statusCode).toBe(404)
+    expect((await app.inject({ method: "PATCH", url: `/api/public/invitations/${rawToken}`, payload: { firstName: "Stale", lastName: "Visitor", company: "Stale", vehiclePlate: "34 OLD 34" } })).statusCode).toBe(404)
+    expect((await app.inject({ method: "POST", url: `/api/public/invitations/${rawToken}/rule-acceptances` })).statusCode).toBe(404)
     const resentInvitation = await app.inject({ method: "POST", url: `/api/visits/${firstVisit.id}/invitation`, headers: employeeHeaders })
     expect(resentInvitation.statusCode).toBe(200); expect(resentInvitation.json()).toMatchObject({ invitationStatus: "SENT" })
     const resentToken = new URL(sentEmails.at(-1)!.text.match(/https?:\/\/\S+/)![0]).searchParams.get("token")!

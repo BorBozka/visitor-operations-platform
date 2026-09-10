@@ -13,6 +13,11 @@ import type { ResourceExtensionGuard } from "./resource-assignment-repository.js
 
 const invitationReset = { invitationStatus: "NOT_SENT", invitationSentAt: null, invitationError: null } as const
 
+async function resetPlannedInvitations(tx: Prisma.TransactionClient, meetingId: string) {
+  await tx.invitation.deleteMany({ where: { visit: { meetingId, status: "PLANNED" } } })
+  await tx.visit.updateMany({ where: { meetingId, status: "PLANNED" }, data: invitationReset })
+}
+
 export class CheckInConflictError extends Error {
   constructor() {
     super("Check-in state changed concurrently.")
@@ -31,13 +36,13 @@ export class VisitorCardConflictError extends Error {
 
 /**
  * A public invitation token no longer authorizes a write: either no invitation carries the hash,
- * or the Visit behind it has left `PLANNED` (cancelled / checked in). The service maps both onto
- * the single public `404 INVITATION_NOT_FOUND` response, which deliberately does not tell the
- * holder of the link which of the two it is.
+ * or the Visit behind it is not both `PLANNED` and invitation `SENT`. The service maps every case
+ * onto the single public `404 INVITATION_NOT_FOUND` response, which deliberately does not tell the
+ * holder of the link why it is inactive.
  */
 export class PublicInvitationInactiveError extends Error {
   constructor() {
-    super("Public invitation is no longer attached to a PLANNED visit.")
+    super("Public invitation is no longer attached to an active sent invitation.")
     this.name = "PublicInvitationInactiveError"
   }
 }
@@ -49,12 +54,12 @@ export interface VisitorCardExpectedState {
 
 /**
  * Re-reads the invitation by token hash *inside* a write transaction and returns its Visit only
- * while that Visit is still persisted as `PLANNED`. This — not the service's earlier snapshot —
- * is the authority every public mutation must gate on.
+ * while that Visit is still persisted as both `PLANNED` and invitation `SENT`. This — not the
+ * service's earlier snapshot — is the authority every public mutation must gate on.
  */
-async function findPlannedPublicVisit(tx: Prisma.TransactionClient, tokenHash: string) {
-  const invitation = await tx.invitation.findUnique({ where: { tokenHash }, include: { visit: { select: { id: true, status: true, visitorId: true } } } })
-  if (!invitation || invitation.visit.status !== "PLANNED") throw new PublicInvitationInactiveError()
+async function findActivePublicVisit(tx: Prisma.TransactionClient, tokenHash: string) {
+  const invitation = await tx.invitation.findUnique({ where: { tokenHash }, include: { visit: { select: { id: true, status: true, invitationStatus: true, visitorId: true } } } })
+  if (!invitation || invitation.visit.status !== "PLANNED" || invitation.visit.invitationStatus !== "SENT") throw new PublicInvitationInactiveError()
   return invitation.visit
 }
 
@@ -216,14 +221,14 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
         if (visitor.visitId) { const visit = await tx.visit.findUnique({ where: { id: visitor.visitId }, select: { visitorId: true } }); if (visit) await tx.visitor.update({ where: { id: visit.visitorId }, data: { firstName: visitor.firstName, lastName: visitor.lastName, email: visitor.email, company: visitor.company, phone: visitor.phone } }) }
         else { const saved = await tx.visitor.create({ data: { firstName: visitor.firstName, lastName: visitor.lastName, email: visitor.email, company: visitor.company, phone: visitor.phone } }); await tx.visit.create({ data: { meetingId: id, visitorId: saved.id, status: "PLANNED" } }) }
       }
-      await tx.visit.updateMany({ where: { meetingId: id, status: "PLANNED" }, data: invitationReset })
+      await resetPlannedInvitations(tx, id)
     })
     return (await this.findMeeting(id))!
   }
   async updateMeetingTimes(id: string, plannedStart: Date, plannedEnd: Date) {
     await this.writeSharedPlanning(id, async (tx) => {
       await tx.meeting.update({ where: { id }, data: { plannedStart, plannedEnd } })
-      await tx.visit.updateMany({ where: { meetingId: id, status: "PLANNED" }, data: invitationReset })
+      await resetPlannedInvitations(tx, id)
     })
   }
   /**
@@ -250,7 +255,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
       await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
         if (this.resourceExtensionGuard) await this.resourceExtensionGuard.assertExtensionSafe(tx, id, plannedEnd)
         await tx.meeting.update({ where: { id }, data: { plannedStart, plannedEnd } })
-        await tx.visit.updateMany({ where: { meetingId: id, status: "PLANNED" }, data: invitationReset })
+        await resetPlannedInvitations(tx, id)
       }, { isolationLevel: "Serializable" }))
     } catch (error) {
       if (error instanceof ApiError) throw error
@@ -290,8 +295,8 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
    */
   async updatePublicVisitor(tokenHash: string, input: { firstName: string; lastName: string; email?: string; company: string; phone?: string; vehiclePlate?: string }) {
     await withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
-      const visit = await findPlannedPublicVisit(tx, tokenHash)
-      const changed = await tx.visit.updateMany({ where: { id: visit.id, status: "PLANNED" }, data: { vehiclePlate: input.vehiclePlate } })
+      const visit = await findActivePublicVisit(tx, tokenHash)
+      const changed = await tx.visit.updateMany({ where: { id: visit.id, status: "PLANNED", invitationStatus: "SENT" }, data: { vehiclePlate: input.vehiclePlate } })
       if (changed.count !== 1) throw new PublicInvitationInactiveError()
       await tx.visitor.update({ where: { id: visit.visitorId }, data: { firstName: input.firstName, lastName: input.lastName, email: input.email, company: input.company, phone: input.phone } })
     }, { isolationLevel: "Serializable" }))
@@ -305,7 +310,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
    */
   async acceptPublicRule(tokenHash: string, ipAddress?: string) {
     return withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
-      const visit = await findPlannedPublicVisit(tx, tokenHash)
+      const visit = await findActivePublicVisit(tx, tokenHash)
       const rule = await tx.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } })
       if (!rule) throw new Error("Missing active rule.")
       const existing = await tx.visitRuleAcceptance.findUnique({ where: { visitId_visitorRuleVersionId: { visitId: visit.id, visitorRuleVersionId: rule.id } } })

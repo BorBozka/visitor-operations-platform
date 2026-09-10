@@ -208,9 +208,9 @@ export class VisitorOperationsService {
   async acceptPublicRule(rawToken: string, ipAddress?: string) { const found = await this.getActivePublicInvitation(rawToken); if (!found.activeRule) throw new ApiError(409, "NO_ACTIVE_RULE", "Aktif ziyaretçi kuralı bulunmuyor."); return this.runPublicMutation(() => this.repository.acceptPublicRule(hashToken(rawToken), ipAddress)) }
 
   /**
-   * The checks above run on a snapshot; the repository re-validates the Visit's persisted status
-   * inside its write transaction and rejects a mutation whose Visit left `PLANNED` in the
-   * meantime. Only that typed rejection collapses into the public 404 — every other failure
+   * The checks above run on a snapshot; the repository re-validates the persisted Visit and
+   * invitation state inside its write transaction and rejects a mutation that is no longer both
+   * `PLANNED` and `SENT`. Only that typed rejection collapses into the public 404 — every other failure
    * (an unexpected database error included) propagates untouched.
    */
   private async runPublicMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -332,7 +332,7 @@ export class VisitorOperationsService {
     const visitors = input.visitors.map((visitor) => { const email = normalizeOptional(visitor.email); if (email && !validEmail(email)) throw new ApiError(400, "VALIDATION_ERROR", "Geçerli bir e-posta adresi girin."); return { ...visitor, firstName: requireText(visitor.firstName, "Ad zorunludur."), lastName: requireText(visitor.lastName, "Soyad zorunludur."), company: requireText(visitor.company, "Ziyaretçi şirketi zorunludur."), email, phone: normalizeOptional(visitor.phone) } })
     return { hostEmployeeId: host.id, input: { ...input, hostEmployeeName: host.fullName, visitors, note: normalizeOptional(input.note), additionalRequirementNote: input.hasAdditionalRequirements ? normalizeOptional(input.additionalRequirementNote) : undefined } }
   }
-  private async getActivePublicInvitation(rawToken: string) { if (!rawToken || rawToken.length > 200) throw invitationNotFound(); const found = await this.repository.findPublicPreRegistration(hashToken(rawToken)); if (!found || found.visit.status !== "PLANNED") throw invitationNotFound(); return found }
+  private async getActivePublicInvitation(rawToken: string) { if (!rawToken || rawToken.length > 200) throw invitationNotFound(); const found = await this.repository.findPublicPreRegistration(hashToken(rawToken)); if (!found || found.visit.status !== "PLANNED" || found.visit.invitationStatus !== "SENT") throw invitationNotFound(); return found }
   private async requireActor(userId: string) { const actor = await this.repository.findEmployeeByUserId(userId); if (!actor) throw new ApiError(403, "EMPLOYEE_PROFILE_REQUIRED", "Bu işlem için çalışan profili gereklidir."); return actor }
   private async requireVisitType(id: string) { const type = await this.repository.findVisitType(id); if (!type) throw new ApiError(404, "NOT_FOUND", "Ziyaret türü bulunamadı."); return type }
   private async requireVisit(id: string) { const visit = await this.repository.findVisit(id); if (!visit) throw new ApiError(404, "NOT_FOUND", "Ziyaret bulunamadı."); return visit }
