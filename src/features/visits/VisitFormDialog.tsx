@@ -19,6 +19,7 @@ import { Select } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { hasVisitorEmail, type InvitationStatus, type Visit } from "@/domain/visits"
 import { HostEmployeeCombobox } from "@/features/visits/HostEmployeeCombobox"
+import { getInvitationSendFeedback } from "@/features/visits/invitation-send-feedback"
 import { getInvitationActionLabel } from "@/features/visits/invitation-status"
 import { useVisits } from "@/features/visits/visit-context"
 import { toMeetingInput, visitFormSchema, type VisitFormValues } from "@/features/visits/visit-form-schema"
@@ -116,6 +117,7 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
   initialVisitsRef.current = initialVisits
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [saveNoticeTone, setSaveNoticeTone] = useState<"info" | "success">("success")
   const [savedMeetingId, setSavedMeetingId] = useState<string | null>(visit?.meetingId ?? null)
   const [savedVisits, setSavedVisits] = useState<Visit[]>(initialVisits)
   const [isSendingInvitation, setIsSendingInvitation] = useState(false)
@@ -147,6 +149,7 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
       form.reset(defaultsFor(nextInitialVisits))
       setSubmitError(null)
       setSaveNotice(null)
+      setSaveNoticeTone("success")
       setSavedMeetingId(visit?.meetingId ?? null)
       setSavedVisits(nextInitialVisits)
       setIsSendingInvitation(false)
@@ -165,6 +168,7 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
   useEffect(() => {
     if (!form.formState.isDirty) return
     setSaveNotice(null)
+    setSaveNoticeTone("success")
     setSubmitError(null)
   }, [form.formState.isDirty])
 
@@ -191,6 +195,7 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
         ? "Ziyaret kaydedildi. Davet henüz gönderilmedi."
         : `${saved.visits.length} ziyaret kaydedildi. Davetler henüz gönderilmedi.`
       setSaveNotice(message)
+      setSaveNoticeTone("success")
       onSaved(message)
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Ziyaret kaydedilemedi.")
@@ -218,19 +223,20 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
       const resultById = new Map(results.map((item) => [item.id, item]))
       const nextSavedVisits = savedVisits.map((item) => resultById.get(item.id) ?? item)
       setSavedVisits(nextSavedVisits)
-      const failed = results.filter((item) => item.invitationStatus === "FAILED")
-      const sent = results.filter((item) => item.invitationStatus === "SENT")
-      if (failed.length > 0) {
-        const message = sent.length > 0
-          ? `${sent.length} davet gönderildi; ${failed.length} davet gönderilemedi.`
-          : failed[0].invitationError ?? "Davet gönderilemedi."
-        setSaveNotice(sent.length > 0 ? message : null)
-        setSubmitError(message)
+      const feedback = getInvitationSendFeedback(results)
+      if (feedback.kind === "error") {
+        setSubmitError(feedback.message)
         return
       }
-      const message = results.length > 1 ? `${sent.length} davet başarıyla gönderildi.` : "Davet başarıyla gönderildi."
-      setSaveNotice(message)
-      onSaved(message)
+      if (feedback.kind === "mixed") {
+        setSaveNotice(feedback.message)
+        setSaveNoticeTone("success")
+        setSubmitError(feedback.message)
+        return
+      }
+      setSaveNotice(feedback.message)
+      setSaveNoticeTone(feedback.kind)
+      if (feedback.kind === "success") onSaved(feedback.message)
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Davet gönderilemedi.")
     } finally {
@@ -479,7 +485,7 @@ export function VisitFormDialog({ open, onOpenChange, visit, invitationScope = "
             )}
 
             {submitError && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">{submitError}</p>}
-            {saveNotice && <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800" role="status">{saveNotice}</p>}
+            {saveNotice && <p className={saveNoticeTone === "success" ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"} role="status">{saveNotice}</p>}
           </div>
 
           <DialogFooter className="shrink-0 items-stretch border-t bg-card px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
