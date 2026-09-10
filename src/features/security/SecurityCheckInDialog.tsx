@@ -24,6 +24,8 @@ export function SecurityCheckInDialog({ visit, open, onOpenChange, onCheckedIn }
   const [currentVisit, setCurrentVisit] = useState<Visit | null>(visit)
   const [availableCards, setAvailableCards] = useState<VisitorCardInventoryItem[]>([])
   const [cardsLoading, setCardsLoading] = useState(true)
+  const [cardsError, setCardsError] = useState<string | null>(null)
+  const [cardsReloadToken, setCardsReloadToken] = useState(0)
   const [selectedCardId, setSelectedCardId] = useState("")
   const [plate, setPlate] = useState("")
   const [phone, setPhone] = useState("")
@@ -40,19 +42,29 @@ export function SecurityCheckInDialog({ visit, open, onOpenChange, onCheckedIn }
     setSubmitting(false)
     setError(null)
     setShowCorrection(false)
-    setCardsLoading(true)
-    let cancelled = false
-    void securityService.getAvailableVisitorCards().then((cards) => {
-      if (cancelled) return
-      setAvailableCards(cards)
-      setCardsLoading(false)
-    })
-    return () => { cancelled = true }
+    setCardsReloadToken(0)
   }, [open, visit])
+
+  // Kept apart from the form reset so a retry reloads only the card list and keeps what was typed.
+  useEffect(() => {
+    if (!open || !visit) return
+    setCardsLoading(true)
+    setCardsError(null)
+    let cancelled = false
+    void securityService.getAvailableVisitorCards()
+      .then((cards) => { if (!cancelled) setAvailableCards(cards) })
+      .catch((reason) => {
+        if (cancelled) return
+        setAvailableCards([])
+        setCardsError(reason instanceof Error ? reason.message : "Ziyaretçi kartları yüklenemedi. Lütfen tekrar deneyin.")
+      })
+      .finally(() => { if (!cancelled) setCardsLoading(false) })
+    return () => { cancelled = true }
+  }, [open, visit, cardsReloadToken])
 
   if (!currentVisit) return null
 
-  const noCardsAvailable = !cardsLoading && availableCards.length === 0
+  const noCardsAvailable = !cardsLoading && !cardsError && availableCards.length === 0
   const submitDisabled = submitting || !selectedCardId || noCardsAvailable
 
   const submit = async () => {
@@ -115,7 +127,14 @@ export function SecurityCheckInDialog({ visit, open, onOpenChange, onCheckedIn }
               <Label htmlFor="security-checkin-card">Ziyaretçi kartı <span className="text-destructive">*</span></Label>
               {cardsLoading
                 ? <p className="mt-1 text-xs text-slate-500">Kartlar yükleniyor…</p>
-                : noCardsAvailable
+                : cardsError
+                  ? (
+                    <div className="mt-1 space-y-1.5">
+                      <p className="text-xs text-red-700" role="alert">{cardsError}</p>
+                      <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => setCardsReloadToken((current) => current + 1)}>Tekrar dene</Button>
+                    </div>
+                  )
+                  : noCardsAvailable
                   ? <p className="mt-1 text-xs text-amber-700">Şu anda uygun ziyaretçi kartı yok.</p>
                   : (
                     <Select id="security-checkin-card" className="mt-1" value={selectedCardId} onChange={(event) => setSelectedCardId(event.target.value)}>
