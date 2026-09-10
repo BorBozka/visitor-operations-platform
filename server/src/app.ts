@@ -58,6 +58,10 @@ export async function buildApp(config: AppConfig, dependencies: AppDependencies)
   const app = Fastify({
     logger: config.nodeEnv === "production",
     bodyLimit: 1_048_576,
+    // Off by default: request.ip stays the socket peer, so forwarding headers cannot be spoofed.
+    // Behind a reverse proxy TRUST_PROXY names the trusted hops, and request.ip — which the login
+    // rate limiter keys on and rule acceptances audit — resolves to the real client.
+    trustProxy: config.trustProxy,
   })
   const authService = dependencies.authService ?? new AuthService(dependencies.authRepository, { sessionTtlHours: config.sessionTtlHours })
 

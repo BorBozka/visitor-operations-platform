@@ -45,6 +45,29 @@ describe("server configuration", () => {
     expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", EMAIL_DELIVERY_MODE: "log" })).toThrow("EMAIL_DELIVERY_MODE=smtp zorunludur")
   })
 
+  it("keeps reverse proxy trust off unless it is configured explicitly", () => {
+    expect(loadConfig({ DATABASE_URL: databaseUrl }).trustProxy).toBe(false)
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "" }).trustProxy).toBe(false)
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "   " }).trustProxy).toBe(false)
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "false" }).trustProxy).toBe(false)
+    expect(loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", ...smtpConfig }).trustProxy).toBe(false)
+  })
+
+  it("passes an explicit list of trusted proxies through as the Fastify trustProxy option", () => {
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "127.0.0.1" }).trustProxy).toEqual(["127.0.0.1"])
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "127.0.0.1, ::1" }).trustProxy).toEqual(["127.0.0.1", "::1"])
+    expect(loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "10.0.0.0/8,fc00::/7,192.168.1.0/255.255.255.0,loopback" }).trustProxy)
+      .toEqual(["10.0.0.0/8", "fc00::/7", "192.168.1.0/255.255.255.0", "loopback"])
+  })
+
+  it("refuses blanket trust, hop counts and malformed proxy addresses instead of falling back to a permissive value", () => {
+    for (const value of ["true", "1", "2", "yes", "bogus", "10.0.0.256", "1.2.3.4/99", "127.0.0.1,", "127.0.0.1,nonsense"]) {
+      expect(() => loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: value })).toThrow(ConfigError)
+    }
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "true" })).toThrow("TRUST_PROXY=true desteklenmez")
+    expect(() => loadConfig({ DATABASE_URL: databaseUrl, TRUST_PROXY: "2" })).toThrow("TRUST_PROXY yalnız IP, CIDR")
+  })
+
   it("keeps the existing SMTP required-field validation and accepts complete production SMTP", () => {
     expect(() => loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", EMAIL_DELIVERY_MODE: "smtp" })).toThrow("SMTP_HOST")
     expect(loadConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production", ...smtpConfig }).emailDelivery).toMatchObject({

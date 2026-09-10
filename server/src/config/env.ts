@@ -1,3 +1,5 @@
+import { isIP } from "node:net"
+
 import { z } from "zod"
 
 const booleanFromEnvironment = z.enum(["true", "false"]).transform((value) => value === "true")
@@ -14,6 +16,8 @@ const environmentSchema = z.object({
   // Login attempts per minute per IP. The default protects real deployments; an E2E run raises
   // it so its many rapid seeded logins are not throttled.
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(100_000).default(10),
+  // Trusted reverse proxies used to resolve the real client IP. Unset/empty/"false" keeps proxy trust off.
+  TRUST_PROXY: z.string().optional(),
   DEMO_SEED_ENABLED: booleanFromEnvironment.default("false"),
   EMAIL_DELIVERY_MODE: emailDeliveryModeSchema.default("log"),
   SMTP_HOST: z.string().optional(),
@@ -24,6 +28,14 @@ const environmentSchema = z.object({
   MAIL_FROM_ADDRESS: z.string().email().optional(),
   MAIL_FROM_NAME: z.string().min(1).max(200).optional(),
 })
+
+/**
+ * Fastify accepts `boolean | string | string[] | TrustProxyFunction` for `trustProxy`. Only the two
+ * safe ends of that contract are exposed here: proxy trust off, or an explicit list of trusted
+ * proxy addresses. `true` (believe whatever any hop claims) is rejected, and so are hop counts —
+ * the installed Fastify already fails hop-count trust closed because it cannot validate the peer.
+ */
+export type TrustProxyConfig = false | string[]
 
 export type EmailDeliveryConfig =
   | { mode: "log"; fromAddress: string; fromName: string }
@@ -37,6 +49,7 @@ export type AppConfig = {
   sessionTtlHours: number
   nodeEnv: "development" | "test" | "production"
   authRateLimitMax: number
+  trustProxy: TrustProxyConfig
   demoSeedEnabled: boolean
   emailDelivery: EmailDeliveryConfig
 }
@@ -46,6 +59,32 @@ export class ConfigError extends Error {
     super(message)
     this.name = "ConfigError"
   }
+}
+
+const trustProxyPresets = new Set(["loopback", "linklocal", "uniquelocal"])
+
+/** Matches the address forms `@fastify/proxy-addr` compiles: named preset, IP, IP/prefix, IPv4/netmask. */
+function isTrustedProxyEntry(entry: string): boolean {
+  if (trustProxyPresets.has(entry)) return true
+  const [address, range, ...rest] = entry.split("/")
+  if (rest.length > 0) return false
+  const family = isIP(address)
+  if (family === 0) return false
+  if (range === undefined) return true
+  if (/^\d+$/.test(range)) return Number(range) <= (family === 4 ? 32 : 128)
+  return family === 4 && isIP(range) === 4
+}
+
+function parseTrustProxy(raw: string | undefined): TrustProxyConfig {
+  const value = (raw ?? "").trim()
+  if (value === "" || value === "false") return false
+  if (value === "true") throw new ConfigError("Geçersiz server yapılandırması: TRUST_PROXY=true desteklenmez; yalnız gerçekten güvenilen proxy adreslerini listeleyin.")
+  const entries = value.split(",").map((entry) => entry.trim())
+  const invalid = entries.filter((entry) => !isTrustedProxyEntry(entry))
+  if (invalid.length > 0) {
+    throw new ConfigError(`Geçersiz server yapılandırması: TRUST_PROXY yalnız IP, CIDR veya loopback/linklocal/uniquelocal değerleri alır: ${invalid.map((entry) => JSON.stringify(entry)).join(", ")}`)
+  }
+  return entries
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -99,6 +138,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     sessionTtlHours: parsed.data.SESSION_TTL_HOURS,
     nodeEnv: parsed.data.NODE_ENV,
     authRateLimitMax: parsed.data.AUTH_RATE_LIMIT_MAX,
+    trustProxy: parseTrustProxy(parsed.data.TRUST_PROXY),
     demoSeedEnabled: parsed.data.DEMO_SEED_ENABLED,
     emailDelivery,
   }

@@ -171,6 +171,21 @@ reverse-proxy yolları) konuşlandırılması tercih edilir. Farklı cross-site 
 cookie ve CORS politikası ayrıca güvenlik değerlendirmesinden geçirilmelidir. Bu repository'deki
 varsayılanlar cross-site deployment için gevşetilmemiştir.
 
+Reverse proxy kullanılan deployment'ta `TRUST_PROXY` ayarlanmalıdır. Bu ayar client IP
+çözümlemesini belirler; per-IP login rate limit'i ve public ziyaretçi kuralı kabul kayıtlarındaki
+IP alanı aynı çözümlenmiş IP'yi kullanır.
+
+- API doğrudan internete/istemciye açıksa `TRUST_PROXY` kapalı kalmalıdır (tanımsız, boş veya
+  `false`). Bu varsayılanda client IP socket peer adresidir ve forwarding header'ları dikkate
+  alınmaz.
+- Reverse proxy varsa yalnız gerçekten güvenilen proxy adreslerini listeleyin: virgülle ayrılmış
+  IP, CIDR veya `loopback`/`linklocal`/`uniquelocal` değerleri (örneğin
+  `TRUST_PROXY=127.0.0.1,::1` ya da proxy'nin gerçek subnet'i).
+- Bütün proxy'lere körü körüne güvenmeyin; `TRUST_PROXY=true` bilinçli olarak reddedilir. Geçersiz
+  bir değer de permissive bir varsayılana düşmez, server başlamadan yapılandırma hatası verir.
+- Ayar kapalıyken proxy arkasında bütün kullanıcılar tek proxy IP'si olarak görülür: login rate
+  limit tek bucket'a düşer ve audit kayıtları gerçek client IP'sini içermez.
+
 ## Backend e-posta teslimi
 
 Geliştirme/test için güvenli varsayılan:
