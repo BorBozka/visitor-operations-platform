@@ -48,7 +48,7 @@ describe("authentication routes", () => {
     // Demo shortcuts live behind the `VITE_DEMO_LOGIN` flag in `@/config/demo-login`, never
     // behind the dev-server check and never as credentials embedded in this component.
     expect(loginSource).not.toContain("import.meta.env.DEV")
-    expect(loginSource).toContain("isDemoLoginEnabled()")
+    expect(loginSource).toContain("isDemoLoginEnabled(import.meta.env.VITE_DEMO_LOGIN)")
     expect(loginSource).toContain("demoLoginAccounts.map")
     expect(loginSource).not.toContain('password: "')
   })

@@ -45,7 +45,7 @@ export function LoginPage() {
         {error && <p role="alert" className="text-xs font-medium text-red-600">{error}</p>}
         <Button type="submit" className="w-full" disabled={loading}>{loading ? "Giriş yapılıyor…" : <><LogIn />Giriş Yap</>}</Button>
       </form>
-      {isDemoLoginEnabled() && <div className="mt-6 border-t border-slate-100 pt-4"><p className="mb-2 text-center text-[11px] font-medium text-slate-500">Demo hesapları</p><div className="grid grid-cols-2 gap-1.5">{demoLoginAccounts.map((account) => <Button key={account.username} type="button" variant="outline" size="sm" className="text-xs" disabled={loading} onClick={() => { setUsername(account.username); setPassword(account.password); setError("") }}>{account.label}</Button>)}</div></div>}
+      {isDemoLoginEnabled(import.meta.env.VITE_DEMO_LOGIN) && <div className="mt-6 border-t border-slate-100 pt-4"><p className="mb-2 text-center text-[11px] font-medium text-slate-500">Demo hesapları</p><div className="grid grid-cols-2 gap-1.5">{demoLoginAccounts.map((account) => <Button key={account.username} type="button" variant="outline" size="sm" className="text-xs" disabled={loading} onClick={() => { setUsername(account.username); setPassword(account.password); setError("") }}>{account.label}</Button>)}</div></div>}
     </section>
   </main>
 }

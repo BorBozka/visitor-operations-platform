@@ -23,6 +23,6 @@ export const demoLoginAccounts: readonly DemoLoginAccount[] = [
 ] as const
 
 /** Only the exact string `true` enables the demo buttons; anything else (including unset) disables them. */
-export function isDemoLoginEnabled(value: unknown = import.meta.env.VITE_DEMO_LOGIN): boolean {
+export function isDemoLoginEnabled(value: unknown): boolean {
   return typeof value === "string" && value.trim() === "true"
 }

@@ -9,6 +9,7 @@ const seedSource = readFileSync(resolve(process.cwd(), "server/prisma/seed-data.
 describe("isDemoLoginEnabled", () => {
   it("is disabled when the flag is unset or empty", () => {
     expect(isDemoLoginEnabled(undefined)).toBe(false)
+    expect(isDemoLoginEnabled(null)).toBe(false)
     expect(isDemoLoginEnabled("")).toBe(false)
   })
 
