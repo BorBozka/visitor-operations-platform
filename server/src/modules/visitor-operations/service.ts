@@ -181,6 +181,18 @@ export class VisitorOperationsService {
     return this.deliverInvitation(id)
   }
 
+  /**
+   * The checks below run on a snapshot that is only a cheap, user-facing guard — every one of them
+   * (`PLANNED`, a usable address, sendability) is re-asserted by `prepareInvitation`'s
+   * compare-and-set, and losing that claim means no email is sent at all.
+   *
+   * The claim is equally the authority on *what* is mailed. A planner edit committing between the
+   * guard read and the claim moves the visitor's address and the Meeting's details while revoking
+   * the old token (NEW-1), so the claim can succeed on a record that no longer resembles `current`.
+   * Addressing or wording the mail from `current` would then deliver the freshly claimed — valid —
+   * token to the address the edit replaced, which is why every user-visible field below is read off
+   * `prepared.visit`, the snapshot the claim transaction returned.
+   */
   private async deliverInvitation(id: string) {
     const current = await this.requireVisit(id)
     this.requireStatus(current, "PLANNED", "Yalnızca planlanmış ziyaretler için davet gönderilebilir.")
@@ -190,12 +202,20 @@ export class VisitorOperationsService {
     const rawToken = this.createInvitationToken()
     const prepared = await this.repository.prepareInvitation(id, hashToken(rawToken), this.now())
     if (!prepared.claimed) return prepared.visit
+    const claimed = prepared.visit
+    // A claimed record whose authoritative snapshot carries no address cannot be mailed; the claim
+    // is released as a failed attempt rather than falling back to the one `current` still holds.
+    if (!claimed.visitor.email) {
+      this.logger.error({ visitId: id }, "Invitation delivery başarısız oldu: güncel kayıtta e-posta adresi yok.")
+      await this.repository.finishInvitation(id, false, this.now())
+      return this.requireVisit(id)
+    }
     const link = `${this.webOrigin.replace(/\/$/, "")}/visitor/pre-registration?token=${encodeURIComponent(rawToken)}`
     try {
       await this.emailSender.send({
-        to: { address: current.visitor.email, name: `${current.visitor.firstName} ${current.visitor.lastName}` },
+        to: { address: claimed.visitor.email, name: `${claimed.visitor.firstName} ${claimed.visitor.lastName}` },
         subject: "Ziyaret ön kayıt bağlantınız",
-        text: `Merhaba ${current.visitor.firstName},\n\n${current.meeting.facilityName} tesisindeki ${current.meeting.hostEmployeeName} konuğunuz için ziyaretiniz ${current.meeting.plannedStart} - ${current.meeting.plannedEnd} arasında planlandı.\n\nGüvenli ön kayıt bağlantısı: ${link}`,
+        text: `Merhaba ${claimed.visitor.firstName},\n\n${claimed.meeting.facilityName} tesisindeki ${claimed.meeting.hostEmployeeName} konuğunuz için ziyaretiniz ${claimed.meeting.plannedStart} - ${claimed.meeting.plannedEnd} arasında planlandı.\n\nGüvenli ön kayıt bağlantısı: ${link}`,
       })
       await this.repository.finishInvitation(id, true, this.now())
     } catch {

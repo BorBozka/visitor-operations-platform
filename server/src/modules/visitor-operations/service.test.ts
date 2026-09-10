@@ -317,6 +317,144 @@ describe("VisitorOperationsService stale SENDING recovery", () => {
   })
 })
 
+/**
+ * Claim-race fixture for the invitation *content* authority (NEW-15).
+ *
+ * `prepareInvitation` applies the pending edit and claims in one indivisible step, the way the
+ * repository's transaction does, and hands back the state as of that claim. So a `editBeforeClaim`
+ * edit is visible to the claim and its snapshot, and invisible to the read the service already
+ * took — exactly the window a planner edit commits in, ordered by the fixture rather than by
+ * timing. `tokenHash` is the persisted invitation row: `null` means revoked.
+ */
+function claimRaceFixture(initial: VisitDto = visit(), existingTokenHash: string | null = null) {
+  const state = { visit: initial, tokenHash: existingTokenHash }
+  let pendingEdit: (() => void) | undefined
+  const repository = unusedRepository({
+    findVisit: async () => state.visit,
+    findMeeting: async () => ({ meeting: state.visit.meeting, visits: [state.visit] }),
+    prepareInvitation: async (_id: string, tokenHash: string) => {
+      pendingEdit?.()
+      pendingEdit = undefined
+      const claimable = state.visit.invitationStatus === "NOT_SENT" || state.visit.invitationStatus === "FAILED"
+        || (state.visit.invitationStatus === "SENDING" && state.visit.invitationSendStale === true)
+      if (!claimable) return { visit: state.visit, claimed: false }
+      state.tokenHash = tokenHash
+      state.visit = { ...state.visit, invitationStatus: "SENDING", invitationSendStale: undefined }
+      return { visit: state.visit, claimed: true }
+    },
+    finishInvitation: async (_id: string, succeeded: boolean) => {
+      state.visit = { ...state.visit, invitationStatus: succeeded ? "SENT" : "FAILED", invitationError: succeeded ? undefined : "Davet teknik bir hata nedeniyle gönderilemedi." }
+    },
+  })
+  return { repository, state, editBeforeClaim: (edit: () => void) => { pendingEdit = edit } }
+}
+
+/** The planner edit: replacement visitor and meeting details, old token revoked, invitation reset. */
+function commitPlannerEdit(fixture: ReturnType<typeof claimRaceFixture>) {
+  fixture.state.visit = {
+    ...fixture.state.visit,
+    visitor: { id: "visitor-1", firstName: "Bora", lastName: "Demir", email: "bora@example.test", company: "Beta" },
+    meeting: { ...fixture.state.visit.meeting, facilityName: "Kuzey Tesisi", hostEmployeeName: "Deniz Ak", plannedStart: "2026-09-05T13:00:00.000Z", plannedEnd: "2026-09-05T14:00:00.000Z" },
+    invitationStatus: "NOT_SENT",
+    invitationSendStale: undefined,
+  }
+  fixture.state.tokenHash = null
+}
+
+describe("VisitorOperationsService invitation content authority", () => {
+  function serviceFor(fixture: ReturnType<typeof claimRaceFixture>, email: FakeEmailSender, token = "content-token") {
+    return new VisitorOperationsService(fixture.repository, email, "https://web.example.test", undefined, () => now, () => token)
+  }
+
+  it("addresses and words an ordinary send from the state its claim returned", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture()
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+
+    expect(email.messages).toHaveLength(1)
+    expect(email.messages[0].to).toEqual({ address: "ada@example.test", name: "Ada Yılmaz" })
+    expect(email.messages[0].text).toContain("Merhaba Ada,")
+    expect(email.messages[0].text).toContain("Merkez tesisindeki Maya Kara")
+    expect(email.messages[0].text).toContain("2026-09-03T09:00:00.000Z - 2026-09-03T10:00:00.000Z")
+  })
+
+  it("mails the edited address and never the one the pre-claim read still held", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture()
+    fixture.editBeforeClaim(() => commitPlannerEdit(fixture))
+
+    await expect(serviceFor(fixture, email, "post-edit-token").sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+
+    expect(email.messages).toHaveLength(1)
+    expect(email.messages[0].to).toEqual({ address: "bora@example.test", name: "Bora Demir" })
+    expect(email.messages.some((message) => message.to.address === "ada@example.test")).toBe(false)
+  })
+
+  it("carries the edited visitor and meeting details into the body it mails", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture()
+    fixture.editBeforeClaim(() => commitPlannerEdit(fixture))
+
+    await serviceFor(fixture, email, "post-edit-token").sendVisitInvitation("visit-1", OWNER)
+
+    const [message] = email.messages
+    expect(message.text).toContain("Merhaba Bora,")
+    expect(message.text).toContain("Kuzey Tesisi tesisindeki Deniz Ak")
+    expect(message.text).toContain("2026-09-05T13:00:00.000Z - 2026-09-05T14:00:00.000Z")
+    expect(message.text).not.toContain("Ada")
+    expect(message.text).not.toContain("Merkez")
+    expect(message.text).not.toContain("Maya Kara")
+    expect(message.text).not.toContain("2026-09-03T09:00:00.000Z")
+  })
+
+  it("mints a fresh token for the claim and never mails the one the edit revoked", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture(visit({ invitationStatus: "FAILED" }), hashToken("revoked-token"))
+    fixture.editBeforeClaim(() => commitPlannerEdit(fixture))
+
+    await serviceFor(fixture, email, "post-edit-token").sendVisitInvitation("visit-1", OWNER)
+
+    expect(fixture.state.tokenHash).toBe(hashToken("post-edit-token"))
+    expect(email.messages[0].text).toContain("token=post-edit-token")
+    expect(email.messages[0].text).not.toContain("revoked-token")
+  })
+
+  it("recovers a stale SENDING onto the edited state, not the snapshot that found it stale", async () => {
+    const email = new FakeEmailSender()
+    const fixture = claimRaceFixture(visit({ invitationStatus: "SENDING", invitationSendStale: true }), hashToken("abandoned-token"))
+    fixture.editBeforeClaim(() => commitPlannerEdit(fixture))
+
+    await expect(serviceFor(fixture, email, "recovered-token").sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "SENT" })
+
+    expect(email.messages).toHaveLength(1)
+    expect(email.messages[0].to.address).toBe("bora@example.test")
+    expect(email.messages[0].text).toContain("Kuzey Tesisi tesisindeki Deniz Ak")
+    expect(email.messages[0].text).toContain("token=recovered-token")
+    expect(fixture.state.tokenHash).toBe(hashToken("recovered-token"))
+  })
+
+  it("sends nothing and reports the claim's snapshot when the claim is lost", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture()
+    // A concurrent sender claims first and edits land with it: this attempt has no send rights.
+    fixture.editBeforeClaim(() => {
+      commitPlannerEdit(fixture)
+      fixture.state.visit = { ...fixture.state.visit, invitationStatus: "SENDING" }
+    })
+
+    const result = await serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)
+
+    expect(email.messages).toHaveLength(0)
+    expect(result).toMatchObject({ invitationStatus: "SENDING", visitor: { email: "bora@example.test" } })
+  })
+
+  it("fails the claimed attempt instead of mailing the address the edit removed", async () => {
+    const email = new FakeEmailSender(), fixture = claimRaceFixture()
+    fixture.editBeforeClaim(() => {
+      fixture.state.visit = { ...fixture.state.visit, visitor: { ...fixture.state.visit.visitor, email: undefined } }
+    })
+
+    await expect(serviceFor(fixture, email).sendVisitInvitation("visit-1", OWNER)).resolves.toMatchObject({ invitationStatus: "FAILED" })
+    expect(email.messages).toHaveLength(0)
+  })
+})
+
 describe("VisitorOperationsService security delivery boundary", () => {
   it("commits planned check-in despite host email failure", async () => {
     const email = new FakeEmailSender(); email.fail = true

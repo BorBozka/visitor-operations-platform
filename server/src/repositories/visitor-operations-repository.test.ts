@@ -196,15 +196,16 @@ function createMeetingFixture(secondVisitStatus = "PLANNED") {
       }),
     },
   }
+  const transaction = vi.fn(async (operation: (client: typeof tx) => Promise<unknown>) => operation(tx))
   const prisma = {
-    $transaction: vi.fn(async (operation: (client: typeof tx) => Promise<unknown>) => operation(tx)),
+    $transaction: transaction,
     invitation: { findUnique: tx.invitation.findUnique },
     meeting: { findUnique: vi.fn(async () => meeting) },
     visit: { findUnique: tx.visit.findUnique, updateMany: visitUpdateMany },
     visitorRuleVersion: { findFirst: vi.fn(async () => null) },
   } as unknown as PrismaClient
 
-  return { invitation: () => invitation, invitationDeleteMany: tx.invitation.deleteMany, meeting, meetingUpdate, planned, prisma, second, visitUpdateMany }
+  return { invitation: () => invitation, invitationDeleteMany: tx.invitation.deleteMany, meeting, meetingUpdate, planned, prisma, second, transaction, visitUpdateMany }
 }
 
 const meetingInput: MeetingInput = {
@@ -351,6 +352,29 @@ describe("PrismaVisitorOperationsRepository stale invitation claims", () => {
 
     expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1)
     expect(fixture.invitation()).toMatchObject({ tokenHash: first.claimed ? "racer-one-hash" : "racer-two-hash" })
+  })
+
+  /**
+   * NEW-15: the claim result is what the caller builds the invitation email from, so it has to be
+   * a snapshot of the state the claim committed on. Reading it after the transaction closes would
+   * pick up whatever landed in between — which is what this pins down, by committing a visitor
+   * change in exactly that instant.
+   */
+  it("returns the snapshot read inside the claim transaction, not one taken after it commits", async () => {
+    const fixture = createMeetingFixture()
+    Object.assign(fixture.planned, { invitationStatus: "NOT_SENT", invitationSendStartedAt: null, invitationSentAt: null })
+    const repository = new PrismaVisitorOperationsRepository(fixture.prisma)
+    const inTransaction = fixture.transaction.getMockImplementation()!
+    fixture.transaction.mockImplementation(async (operation) => {
+      const result = await inTransaction(operation)
+      fixture.planned.visitor.email = "after-the-claim@example.test"
+      return result
+    })
+
+    const prepared = await repository.prepareInvitation("visit-planned", "claim-token-hash", claimAt)
+
+    expect(prepared.claimed).toBe(true)
+    expect(prepared.visit).toMatchObject({ invitationStatus: "SENDING", visitor: { email: "ada@example.test" } })
   })
 
   it("reports a claimed SENDING as stale only once its attempt is old enough to be abandoned", async () => {

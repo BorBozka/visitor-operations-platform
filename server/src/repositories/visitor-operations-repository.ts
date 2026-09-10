@@ -131,6 +131,16 @@ export function toVisit(row: VisitRow): VisitDto {
   }
 }
 
+/**
+ * The flattened Visit read model, read through whichever client is passed. Taking the client makes
+ * the same projection available *inside* a transaction, which `prepareInvitation` needs so its
+ * result is a snapshot of the state it just claimed rather than a later, separately-read one.
+ */
+async function readVisit(client: Prisma.TransactionClient, id: string): Promise<VisitDto | null> {
+  const row = await client.visit.findUnique({ where: { id }, include: visitInclude })
+  return row ? toVisit(row) : null
+}
+
 function toVisitType(row: VisitType): VisitTypeDto { return { id: row.id, name: row.name, active: row.active, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() } }
 function toRule(row: VisitorRuleVersion): VisitorRuleDto { return { id: row.id, version: row.version, content: row.content, publishedAt: row.publishedAt.toISOString(), active: row.active } }
 function toCard(row: VisitorCard): VisitorCardDto {
@@ -166,6 +176,10 @@ export interface VisitorOperationsRepository {
    * Atomically claims the one right to send this invitation, returning `claimed: false` when the
    * record is already sent or has a send attempt still in flight. See the implementation for the
    * compare-and-set that also makes an abandoned `SENDING` attempt re-claimable.
+   *
+   * `visit` is the authoritative snapshot of the claimed state, read inside the claim transaction:
+   * the recipient address and every user-visible field of the invitation email must come from it,
+   * never from a snapshot the caller read before claiming.
    */
   prepareInvitation(visitId: string, tokenHash: string, now: Date): Promise<{ visit: VisitDto; claimed: boolean }>
   finishInvitation(visitId: string, succeeded: boolean, now: Date): Promise<void>
@@ -206,7 +220,7 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
   async saveVisitType(input: { id?: string; name: string; nameNormalized: string; active: boolean }) { const row = input.id ? await this.prisma.visitType.update({ where: { id: input.id }, data: input }) : await this.prisma.visitType.create({ data: input }); return toVisitType(row) }
   async listMeetings() { const rows = await this.prisma.meeting.findMany({ include: meetingInclude, orderBy: { plannedStart: "asc" } }); return rows.map(toMeeting) }
   async listVisits() { return (await this.prisma.visit.findMany({ include: visitInclude, orderBy: { createdAt: "asc" } })).map(toVisit) }
-  async findVisit(id: string) { const row = await this.prisma.visit.findUnique({ where: { id }, include: visitInclude }); return row ? toVisit(row) : null }
+  async findVisit(id: string) { return readVisit(this.prisma, id) }
   async findMeeting(id: string) {
     const row = await this.prisma.meeting.findUnique({ where: { id }, include: { visitType: true, hostCompany: true, facility: true, visits: { include: visitInclude, orderBy: { createdAt: "asc" } } } })
     return row ? { meeting: toMeeting(row), visits: row.visits.map(toVisit) } : null
@@ -298,30 +312,38 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
    *
    * The upsert always writes the new hash, so a re-claim revokes the previous attempt's token
    * rather than reviving it.
+   *
+   * The returned `visit` is read back *inside* this transaction, after the claim, and is the only
+   * state a caller may build the invitation email from. Reading it afterwards instead would reopen
+   * the gap this closes: a planner edit committing between the caller's own snapshot and the claim
+   * moves the visitor's address and the Meeting's details while `resetPlannedInvitations` revokes
+   * the old token, so a caller trusting its pre-claim read would mail the freshly claimed — valid —
+   * token to the address the edit replaced.
    */
   async prepareInvitation(visitId: string, tokenHash: string, now: Date) {
     const staleBefore = invitationSendStaleBefore(now)
-    let claimed = false
-    await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
+      let claimed = false
       const visit = await tx.visit.findUnique({ where: { id: visitId }, include: { visitor: true } })
-      if (!visit || visit.status !== "PLANNED" || !visit.visitor.email) return
-      const changed = await tx.visit.updateMany({
-        where: {
-          id: visitId,
-          OR: [
-            { invitationStatus: { in: ["NOT_SENT", "FAILED"] } },
-            { invitationStatus: "SENDING", invitationSendStartedAt: null },
-            { invitationStatus: "SENDING", invitationSendStartedAt: { lte: staleBefore } },
-          ],
-        },
-        data: { invitationStatus: "SENDING", invitationSendStartedAt: now, invitationError: null },
-      })
-      if (changed.count) {
-        claimed = true
-        await tx.invitation.upsert({ where: { visitId }, create: { visitId, tokenHash }, update: { tokenHash } })
+      if (visit && visit.status === "PLANNED" && visit.visitor.email) {
+        const changed = await tx.visit.updateMany({
+          where: {
+            id: visitId,
+            OR: [
+              { invitationStatus: { in: ["NOT_SENT", "FAILED"] } },
+              { invitationStatus: "SENDING", invitationSendStartedAt: null },
+              { invitationStatus: "SENDING", invitationSendStartedAt: { lte: staleBefore } },
+            ],
+          },
+          data: { invitationStatus: "SENDING", invitationSendStartedAt: now, invitationError: null },
+        })
+        if (changed.count) {
+          claimed = true
+          await tx.invitation.upsert({ where: { visitId }, create: { visitId, tokenHash }, update: { tokenHash } })
+        }
       }
+      return { visit: (await readVisit(tx, visitId))!, claimed }
     })
-    return { visit: (await this.findVisit(visitId))!, claimed }
   }
   async finishInvitation(visitId: string, succeeded: boolean, now: Date) { await this.prisma.visit.updateMany({ where: { id: visitId, invitationStatus: "SENDING" }, data: succeeded ? { invitationStatus: "SENT", invitationSentAt: now, invitationError: null } : { invitationStatus: "FAILED", invitationError: "Davet teknik bir hata nedeniyle gönderilemedi." } }) }
   async findPublicPreRegistration(tokenHash: string) { const invitation = await this.prisma.invitation.findUnique({ where: { tokenHash }, include: { visit: { include: visitInclude } } }); if (!invitation) return null; const active = await this.prisma.visitorRuleVersion.findFirst({ where: { active: true }, orderBy: { version: "desc" } }); return { visit: toVisit(invitation.visit), activeRule: active ? toRule(active) : null } }
