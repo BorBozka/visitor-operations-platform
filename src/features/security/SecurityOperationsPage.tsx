@@ -36,6 +36,9 @@ export function SecurityOperationsPage() {
   const [checkInTarget, setCheckInTarget] = useState<Visit | null>(null)
   const [checkOutTarget, setCheckOutTarget] = useState<Visit | null>(null)
   const [cardIssues, setCardIssues] = useState<SecurityCardIssue[]>([])
+  const [cardIssuesLoading, setCardIssuesLoading] = useState(true)
+  const [cardIssuesError, setCardIssuesError] = useState<string | null>(null)
+  const [cardIssuesReloadToken, setCardIssuesReloadToken] = useState(0)
   const [cardReturnsOpen, setCardReturnsOpen] = useState(false)
   const [unplannedVisitOpen, setUnplannedVisitOpen] = useState(false)
   const [openNoteVisitId, setOpenNoteVisitId] = useState<string | null>(null)
@@ -45,13 +48,22 @@ export function SecurityOperationsPage() {
     return () => window.clearInterval(intervalId)
   }, [])
 
+  // Secondary loader: a rejected fetch must not be indistinguishable from "no unreturned cards", so it
+  // keeps its own loading/error state and a retry token that never reloads the primary visit data.
   useEffect(() => {
     let cancelled = false
-    void securityService.getUnreturnedVisitorCardIssues().then((issues) => {
-      if (!cancelled) setCardIssues(issues)
-    })
+    setCardIssuesLoading(true)
+    setCardIssuesError(null)
+    void securityService.getUnreturnedVisitorCardIssues()
+      .then((issues) => { if (!cancelled) setCardIssues(issues) })
+      .catch((reason) => {
+        if (cancelled) return
+        setCardIssues([])
+        setCardIssuesError(reason instanceof Error ? reason.message : "İade edilmemiş kart bilgileri yüklenemedi. Lütfen tekrar deneyin.")
+      })
+      .finally(() => { if (!cancelled) setCardIssuesLoading(false) })
     return () => { cancelled = true }
-  }, [visits])
+  }, [visits, cardIssuesReloadToken])
 
   const scope = useMemo(() => {
     if (!referenceData) return null
@@ -98,6 +110,17 @@ export function SecurityOperationsPage() {
             className="h-9 border-slate-300 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-500 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0"
           />
         </label>
+
+        {cardIssuesLoading && (
+          <span className="shrink-0 text-xs text-slate-400" role="status">İade bilgileri yükleniyor…</span>
+        )}
+
+        {cardIssuesError && (
+          <div className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-2.5 text-xs text-red-700">
+            <span role="alert">{cardIssuesError}</span>
+            <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={() => setCardIssuesReloadToken((current) => current + 1)}>Tekrar dene</Button>
+          </div>
+        )}
 
         {scopedCardIssues.length > 0 && (
           <Button type="button" variant="outline" className="h-9 shrink-0" onClick={() => setCardReturnsOpen(true)}>
