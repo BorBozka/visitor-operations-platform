@@ -318,6 +318,75 @@ describe("VisitorOperationsService stale SENDING recovery", () => {
 })
 
 /**
+ * NEW-16: what the *losing* side of a claim race is allowed to report.
+ *
+ * Two actors retrying the same stale `SENDING` both pass the cheap sendability guard, and the
+ * compare-and-set then hands the send right to exactly one of them (NEW-9). The loser mails
+ * nothing, yet the record it reads back is the winner's fresh `SENDING` — a state that is neither
+ * this request's success nor its failure. So the direct send must hand that `SENDING` back
+ * verbatim (never the winner's eventual outcome), and the batch send must leave the loser out of
+ * its results entirely, so no caller can count it as a delivered invitation.
+ *
+ * Both actors run against `sendClaimFixture`, whose claim is a single synchronous check-and-write
+ * and whose every other step resolves on the microtask queue — the race is ordered by the runtime's
+ * own interleaving, with no timers and nothing waiting on real elapsed time. Each assertion reads
+ * the pair of outcomes as an unordered set, so it holds whichever actor happens to win.
+ */
+describe("VisitorOperationsService concurrent invitation claim feedback", () => {
+  function serviceFor(fixture: ReturnType<typeof sendClaimFixture>, email: FakeEmailSender) {
+    return new VisitorOperationsService(fixture.repository, email, "https://web.example.test", undefined, () => fixture.clock.now, () => "race-token")
+  }
+
+  function staleRace(winnerFails: boolean) {
+    const email = new FakeEmailSender(); email.fail = winnerFails
+    const fixture = sendClaimFixture({ invitationStatus: "SENDING", sendStartedAt: STALE_AGO })
+    return { email, fixture, service: serviceFor(fixture, email) }
+  }
+
+  /** Exactly one claim, so exactly one SMTP attempt and exactly one fresh token. */
+  function expectSingleAttempt(email: FakeEmailSender, fixture: ReturnType<typeof sendClaimFixture>) {
+    expect(email.messages).toHaveLength(1)
+    expect(fixture.tokenHashes).toHaveLength(1)
+  }
+
+  it.each([
+    { label: "succeeds", winnerFails: false, winnerStatus: "SENT" as InvitationStatus },
+    { label: "fails", winnerFails: true, winnerStatus: "FAILED" as InvitationStatus },
+  ])("hands the direct-send claim loser the in-flight SENDING when the winner's send $label", async ({ winnerFails, winnerStatus }) => {
+    const { email, fixture, service } = staleRace(winnerFails)
+
+    const results = await Promise.all([
+      service.sendVisitInvitation("visit-1", OWNER),
+      service.sendVisitInvitation("visit-1", OWNER),
+    ])
+
+    expectSingleAttempt(email, fixture)
+    // One `SENDING` — the loser, which sent nothing — and one winner outcome. Never two of either:
+    // a second `SENT` would be the false confirmation this guards against.
+    expect(results.map((item) => item.invitationStatus).sort()).toEqual([winnerStatus, "SENDING"].sort())
+  })
+
+  it.each([
+    { label: "succeeds", winnerFails: false, winnerStatus: "SENT" as InvitationStatus },
+    { label: "fails", winnerFails: true, winnerStatus: "FAILED" as InvitationStatus },
+  ])("leaves the batch-send claim loser with no results when the winner's send $label", async ({ winnerFails, winnerStatus }) => {
+    const { email, fixture, service } = staleRace(winnerFails)
+
+    const batches = await Promise.all([
+      service.sendMeetingInvitations("meeting-1", OWNER),
+      service.sendMeetingInvitations("meeting-1", OWNER),
+    ])
+
+    expectSingleAttempt(email, fixture)
+    const statuses = batches.map((batch) => batch.map((item) => item.invitationStatus))
+    // The loser's batch is empty — NEW-10 then reports it as "nothing to send" rather than as a
+    // send of its own — and only the actor that actually claimed reports an outcome.
+    expect(statuses.sort()).toEqual([[], [winnerStatus]].sort())
+    expect(batches.flat().some((item) => item.invitationStatus === "SENDING")).toBe(false)
+  })
+})
+
+/**
  * Claim-race fixture for the invitation *content* authority (NEW-15).
  *
  * `prepareInvitation` applies the pending edit and claims in one indivisible step, the way the

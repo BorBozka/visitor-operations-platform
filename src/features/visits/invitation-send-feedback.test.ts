@@ -43,4 +43,43 @@ describe("getInvitationSendFeedback", () => {
       message: "1 davet gönderildi; 1 davet gönderilemedi.",
     })
   })
+
+  // NEW-16: a `SENDING` result belongs to whichever request won the send claim — this one mailed
+  // nothing on its behalf, so it may never be counted, or worded, as a delivered invitation.
+  it("never reports a SENDING result as a sent invitation", () => {
+    expect(getInvitationSendFeedback([{ invitationStatus: "SENDING", invitationError: undefined }])).toEqual({
+      kind: "info",
+      message: "Gönderilecek davet bulunamadı.",
+    })
+  })
+
+  it("reports a batch of nothing but SENDING results the way it reports an empty batch", () => {
+    expect(getInvitationSendFeedback([
+      { invitationStatus: "SENDING", invitationError: undefined },
+      { invitationStatus: "SENDING", invitationError: undefined },
+    ])).toEqual({
+      kind: "info",
+      message: "Gönderilecek davet bulunamadı.",
+    })
+  })
+
+  it("counts only the delivered invitations when a SENDING result rides along", () => {
+    expect(getInvitationSendFeedback([
+      { invitationStatus: "SENT", invitationError: undefined },
+      { invitationStatus: "SENDING", invitationError: undefined },
+    ])).toEqual({
+      kind: "success",
+      message: "Davet başarıyla gönderildi.",
+    })
+  })
+
+  it("keeps a SENDING result out of the failure tally too", () => {
+    expect(getInvitationSendFeedback([
+      { invitationStatus: "SENDING", invitationError: undefined },
+      { invitationStatus: "FAILED", invitationError: "SMTP ulaşılamadı." },
+    ])).toEqual({
+      kind: "error",
+      message: "SMTP ulaşılamadı.",
+    })
+  })
 })

@@ -30,6 +30,16 @@ describe("VisitFormDialog invitation action", () => {
     expect(dialogSource).toContain("Davet göndermek için önce ziyareti kaydedin.")
   })
 
+  // NEW-16: the dialog announces a send only through `getInvitationSendFeedback`, which counts an
+  // exact `SENT` and nothing else. A batch that claimed nothing comes back `info`, so it shows the
+  // "nothing to send" notice and must not close the dialog with a delivery it never made.
+  it("confirms a send only for success feedback, never for an informational result", () => {
+    expect(dialogSource).toContain("const feedback = getInvitationSendFeedback(results)")
+    expect(dialogSource).toContain('if (feedback.kind === "success") onSaved(feedback.message)')
+    // ...and never unconditionally, on its own line, outside that guard.
+    expect(dialogSource).not.toMatch(/\n\s*onSaved\(feedback\.message\)/)
+  })
+
   it("states what the dialog does, in one sentence per mode", () => {
     expect(dialogSource).toContain("Tesise gelecek ziyaretçiler için ziyaret kaydı oluşturun.")
     expect(dialogSource).toContain("Bu ziyaretin bilgilerini güncelleyin.")

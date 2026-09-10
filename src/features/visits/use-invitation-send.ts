@@ -44,7 +44,7 @@ export function useInvitationSend() {
       const result = await sendVisitInvitation(visitId)
       if (result.invitationStatus === "FAILED") {
         setFailedIds((current) => withId(current, visitId))
-      } else {
+      } else if (result.invitationStatus === "SENT") {
         setSentIds((current) => withId(current, visitId))
         const timer = window.setTimeout(() => {
           timersRef.current.delete(timer)
@@ -52,6 +52,10 @@ export function useInvitationSend() {
         }, SENT_RESULT_LINGER_MS)
         timersRef.current.add(timer)
       }
+      // A result still `SENDING` is neither: this request lost the send claim to a concurrent
+      // sender, so it must not paint the row "Davet gönderildi" for an email it never sent. Left
+      // out of both sets, the row falls back to `resolveStatus`'s reading of the reloaded record —
+      // a spinner while the winner's attempt is in flight, a retry once it is stale or failed.
     } catch {
       setFailedIds((current) => withId(current, visitId))
     } finally {

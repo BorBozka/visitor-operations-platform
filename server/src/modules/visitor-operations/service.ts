@@ -34,6 +34,13 @@ function invitationSendable(visit: Pick<VisitDto, "invitationStatus" | "invitati
   return visit.invitationStatus === "SENDING" && visit.invitationSendStale === true
 }
 
+/**
+ * The outcome of one internal delivery attempt. `attempted` is `true` only when this request held
+ * the send claim and so owns `visit` as its own result; `false` means another sender holds the
+ * claim (or an attempt is still in flight) and this request mailed nothing at all.
+ */
+type InvitationDelivery = { attempted: boolean; visit: VisitDto }
+
 /** Is a meeting visible to this caller (scope + role-specific ownership)? */
 function isMeetingVisible(ctx: AccessContext, meeting: Pick<MeetingDto, "hostCompanyId" | "facilityId" | "creatorEmployeeId" | "hostEmployeeId">): boolean {
   if (!scopeAllows(ctx, { companyId: meeting.hostCompanyId, facilityId: meeting.facilityId })) return false
@@ -170,7 +177,11 @@ export class VisitorOperationsService {
     const delivered: VisitDto[] = []
     for (const visit of meeting.visits) {
       if (visit.status !== "PLANNED" || !visit.visitor.email || !invitationSendable(visit)) continue
-      delivered.push(await this.deliverInvitation(visit.id))
+      // Only a visit this batch actually claimed belongs in the result. A claim lost to a
+      // concurrent sender — or an attempt that turned out to still be in flight — mailed nothing
+      // here, and returning it would let the caller count a `SENDING` record as delivered.
+      const delivery = await this.deliverInvitation(visit.id)
+      if (delivery.attempted) delivered.push(delivery.visit)
     }
     return delivered
   }
@@ -178,7 +189,7 @@ export class VisitorOperationsService {
   async sendVisitInvitation(id: string, ctx: AccessContext) {
     const current = await this.requireVisit(id)
     assertMeetingMutable(ctx, current.meeting)
-    return this.deliverInvitation(id)
+    return (await this.deliverInvitation(id)).visit
   }
 
   /**
@@ -192,23 +203,30 @@ export class VisitorOperationsService {
    * Addressing or wording the mail from `current` would then deliver the freshly claimed — valid —
    * token to the address the edit replaced, which is why every user-visible field below is read off
    * `prepared.visit`, the snapshot the claim transaction returned.
+   *
+   * `attempted` is what the callers need out of that claim: it is `true` only for the one request
+   * that won the right to send and therefore produced this invitation's outcome. A request that
+   * finds an attempt already in flight, or loses the compare-and-set to a concurrent sender, mails
+   * nothing and gets `attempted: false` with whatever the record currently reads — typically
+   * `SENDING`, the winner's in-flight claim. That state is *not* this request's result, so no
+   * caller may present it as one.
    */
-  private async deliverInvitation(id: string) {
+  private async deliverInvitation(id: string): Promise<InvitationDelivery> {
     const current = await this.requireVisit(id)
     this.requireStatus(current, "PLANNED", "Yalnızca planlanmış ziyaretler için davet gönderilebilir.")
     if (!current.visitor.email) throw new ApiError(409, "VISITOR_EMAIL_REQUIRED", "Ziyaretçinin davet gönderilebilecek e-posta adresi bulunmuyor.")
-    if (!invitationSendable(current)) return current
+    if (!invitationSendable(current)) return { attempted: false, visit: current }
 
     const rawToken = this.createInvitationToken()
     const prepared = await this.repository.prepareInvitation(id, hashToken(rawToken), this.now())
-    if (!prepared.claimed) return prepared.visit
+    if (!prepared.claimed) return { attempted: false, visit: prepared.visit }
     const claimed = prepared.visit
     // A claimed record whose authoritative snapshot carries no address cannot be mailed; the claim
     // is released as a failed attempt rather than falling back to the one `current` still holds.
     if (!claimed.visitor.email) {
       this.logger.error({ visitId: id }, "Invitation delivery başarısız oldu: güncel kayıtta e-posta adresi yok.")
       await this.repository.finishInvitation(id, false, this.now())
-      return this.requireVisit(id)
+      return { attempted: true, visit: await this.requireVisit(id) }
     }
     const link = `${this.webOrigin.replace(/\/$/, "")}/visitor/pre-registration?token=${encodeURIComponent(rawToken)}`
     try {
@@ -222,7 +240,7 @@ export class VisitorOperationsService {
       this.logger.error({ visitId: id }, "Invitation delivery başarısız oldu.")
       await this.repository.finishInvitation(id, false, this.now())
     }
-    return this.requireVisit(id)
+    return { attempted: true, visit: await this.requireVisit(id) }
   }
 
   async getPublicPreRegistration(rawToken: string): Promise<PublicPreRegistrationDto> {
