@@ -3,7 +3,7 @@ import Fastify from "fastify"
 import { createAuthGuards } from "./auth/auth-guards.js"
 import { AuthService } from "./auth/auth-service.js"
 import type { AppConfig } from "./config/env.js"
-import { ApiError } from "./lib/api-error.js"
+import { ApiError, rateLimitedError } from "./lib/api-error.js"
 import { registerAccountRoutes } from "./modules/account/routes.js"
 import { registerAuthRoutes } from "./modules/auth/routes.js"
 import { registerHealthRoutes } from "./modules/health/routes.js"
@@ -38,6 +38,11 @@ import type { ResourceAssignmentRepository } from "./repositories/resource-assig
 import type { TransportAssignmentRepository } from "./repositories/transport-assignment-repository.js"
 import type { ReportsRepository } from "./repositories/reports-repository.js"
 
+/** A throttle raised by `@fastify/rate-limit`: a plain `Error` whose only contract is `statusCode`. */
+function isRateLimitError(error: unknown): boolean {
+  return error instanceof Error && (error as { statusCode?: unknown }).statusCode === 429
+}
+
 export interface AppDependencies {
   authRepository: AuthRepository
   organizationRepository?: OrganizationRepository
@@ -68,8 +73,15 @@ export async function buildApp(config: AppConfig, dependencies: AppDependencies)
   app.decorateRequest("currentUser", null)
   await registerSecurityPlugins(app, config)
 
+  // `@fastify/rate-limit` raises a throttled request as a plain `Error` carrying only
+  // `statusCode: 429` — never an `ApiError` — so it would otherwise be sanitized into a generic
+  // 500 and the client would see a server fault instead of a throttle. Map that one framework
+  // status explicitly onto the app's own envelope; the plugin's `retry-after`/`x-ratelimit-*`
+  // headers are already on the reply and are left untouched. Every other non-`ApiError` stays
+  // generic: the status a stray exception happens to carry is not a contract we vouch for.
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof ApiError) return reply.status(error.statusCode).send({ error: { code: error.code, message: error.message } })
+    const handled = error instanceof ApiError ? error : isRateLimitError(error) ? rateLimitedError() : null
+    if (handled) return reply.status(handled.statusCode).send({ error: { code: handled.code, message: handled.message } })
     request.log.error(error)
     return reply.status(500).send({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
   })

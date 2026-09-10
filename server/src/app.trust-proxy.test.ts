@@ -91,9 +91,10 @@ describe("login rate limit isolation across the proxy boundary", () => {
   }
 
   /**
-   * The limiter's own `retry-after` header is the throttling signal here: an exceeded limit is
-   * raised as an error and the app's error handler rewrites its status, so the header — not the
-   * status code — says whether this request consumed an already-empty bucket.
+   * A request that consumed an already-empty bucket answers 429 and carries the limiter's own
+   * `retry-after` header (NEW-11 — the error handler maps the plugin's throttle instead of
+   * sanitizing it into a generic 500). Both are asserted together so a regression in either the
+   * status contract or the header cannot pass as bucket isolation.
    */
   async function throttled(app: Awaited<ReturnType<typeof buildApp>>, forwardedFor: string) {
     const response = await app.inject({
@@ -103,7 +104,9 @@ describe("login rate limit isolation across the proxy boundary", () => {
       headers: { "x-forwarded-for": forwardedFor },
       payload: { username: "calisan", password: "calisan" },
     })
-    return response.headers["retry-after"] !== undefined
+    const isThrottled = response.statusCode === 429
+    expect(response.headers["retry-after"] !== undefined).toBe(isThrottled)
+    return isThrottled
   }
 
   it("collapses every proxied client into the proxy's single bucket while proxy trust is off", async () => {

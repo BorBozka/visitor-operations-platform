@@ -80,6 +80,15 @@ describe("HttpClient", () => {
     expect((error as ApiClientError).isConflict).toBe(true)
   })
 
+  it("carries the backend's throttle response through as status 429, which login classification keys on", async () => {
+    const { client } = makeClient(() => jsonResponse(429, { error: { code: "RATE_LIMITED", message: "Çok fazla istek gönderildi. Lütfen kısa bir süre sonra tekrar deneyin." } }))
+
+    const error = await client.post("/auth/login", { username: "calisan", password: "hatali" }).catch((cause) => cause)
+    expect(isApiClientError(error)).toBe(true)
+    expect((error as ApiClientError).status).toBe(429)
+    expect((error as ApiClientError).code).toBe("RATE_LIMITED")
+  })
+
   it("surfaces 401 through onUnauthorized before throwing", async () => {
     const onUnauthorized = vi.fn()
     const { client } = makeClient(() => jsonResponse(401, { error: { code: "UNAUTHENTICATED", message: "Oturum gerekli." } }), { onUnauthorized })
