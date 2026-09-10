@@ -148,11 +148,12 @@ Staging/production mevcut migration geçmişini uygular; yeni migration üretmez
 
     pnpm db:migrate:deploy       # prisma migrate deploy
 
-Production artifact'larını oluşturup derlenmiş backend'i çalıştırmak için:
+Temiz bir production veritabanını sıfırdan kullanılabilir hale getirmenin desteklenen sırası:
 
     pnpm install --frozen-lockfile
     pnpm db:generate
     pnpm db:migrate:deploy
+    pnpm db:bootstrap              # yalnız bir kez; aşağıya bakın
     pnpm build:all
     pnpm start:api
 
@@ -160,8 +161,68 @@ Production artifact'larını oluşturup derlenmiş backend'i çalıştırmak iç
 `server/dist/` altına derler; `pnpm start:api` bu çıktıyı Node.js ile çalıştırır. Frontend
 `dist/` dizini ayrıca statik bir web sunucusu/CDN üzerinden servis edilmelidir.
 
-Production seed önerilmez. Development/test seed guard'ı `NODE_ENV=development` ve
+Bootstrap adımından sonra ilk Admin normal `Giriş Yap` ekranından LOCAL kimlik doğrulamasıyla
+oturum açar; kalan organizasyon ve uygulama yapılandırması (ek tesisler, departmanlar, güvenlik
+kapıları, ziyaret türleri, ziyaretçi kartları, operasyon parametreleri, diğer kullanıcılar ve
+aktif ziyaretçi kuralı) Admin UI/API üzerinden yapılır.
+
+### Production bootstrap (`pnpm db:bootstrap`)
+
+Temiz bir veritabanında henüz giriş yapılabilecek bir Admin yoktur ve root Company API üzerinden
+oluşturulamaz (yeni şirket oluşturmak her Admin'in yetki kapsamının dışındadır). Bu tek seferlik
+komut o boşluğu kapatır ve **minimum administrative root** dışında hiçbir şey oluşturmaz:
+
+- ilk **Company**
+- o şirket altında bir **Facility**
+- ilk **ADMIN** kullanıcı (LOCAL, aktif, Argon2id ile hash'lenmiş parola)
+- Admin'in **şirket düzeyi yetki kapsamı** — tesis/güvenlik kapısı ataması yoktur; bu, mevcut
+  yetkilendirme modelinin ifade edebildiği en geniş kapsamdır (boş tesis/kapı listesi, kapsanan
+  şirket içinde "sınırsız" anlamına gelir). Yetkilendirmeyi atlayan özel bir bootstrap rolü
+  oluşturulmaz.
+
+Ziyaretçi kuralı bilinçli olarak yayımlanmaz: aktif kural yokken ilgili akış `409 NO_ACTIVE_RULE`
+döner ve kuralı yayımlamak Admin'in bilinçli iş akışının parçasıdır.
+
+Komut şu şekilde çalıştırılır (kök karşılığı `pnpm db:bootstrap`):
+
+    pnpm --filter @visitor-management/api db:bootstrap
+
+Gerekli girdiler yalnız environment üzerinden verilir; hiçbirinin varsayılanı yoktur ve komut
+eksik girdiyle çalışmaz (fail-closed):
+
+| Değişken | Açıklama |
+| --- | --- |
+| `BOOTSTRAP_ENABLED` | Kazara çalıştırmaya karşı açık onay; `true` olmalıdır. |
+| `BOOTSTRAP_COMPANY_NAME` | İlk şirketin adı. |
+| `BOOTSTRAP_FACILITY_NAME` | O şirket altındaki ilk tesisin adı. |
+| `BOOTSTRAP_ADMIN_USERNAME` | İlk Admin'in kullanıcı adı. |
+| `BOOTSTRAP_ADMIN_FULL_NAME` | İlk Admin'in ad soyadı. |
+| `BOOTSTRAP_ADMIN_EMAIL` | İlk Admin'in e-posta adresi. |
+| `BOOTSTRAP_ADMIN_PASSWORD` | En az sekiz karakter (uygulamanın LOCAL hesap politikası). |
+
+Parolayı secret manager/CI secret üzerinden geçici olarak sağlayın; komut satırına positional
+argüman olarak vermeyin ve dosyaya yazmayın. Parola yalnız Argon2id hash'i olarak saklanır; düz
+metin hâli log'a, hata mesajına veya veritabanına yazılmaz. Bootstrap tamamlandıktan sonra
+`BOOTSTRAP_*` değişkenlerini ortamdan kaldırın.
+
+Güvenlik davranışı:
+
+- **Temiz veritabanı** (hiç Company ve hiç User yok): Company + Facility + ADMIN + kapsam tek bir
+  `Serializable` transaction içinde oluşturulur. Yarım kalmış bir kök (Admin'siz şirket, kapsamsız
+  Admin) commit edilemez.
+- **Aynı bootstrap tekrar çalıştırılırsa**: beklenen kök birebir mevcutsa hiçbir yazma yapılmaz,
+  parola sessizce döndürülmez ve komut "zaten bootstrap edilmiş" sonucuyla çıkar.
+- **Belirsiz/başka veri içeren veritabanı** (başka şirket, başka Admin, beklenen kökün olmaması,
+  organizasyon kaydı olup Admin olmaması gibi): komut hiçbir şey yazmadan hata ile çıkar. Bu
+  durumda doğru kararı operatör verir; bootstrap mevcut organizasyon grafiğine veri enjekte etmez.
+
+Bootstrap yalnız bu komutla çalışır: `pnpm db:seed` onu çağırmaz, server başlangıcı ve API onu
+otomatik tetiklemez.
+
+Production'da development/test seed'i çalıştırmayın. Demo seed guard'ı `NODE_ENV=development` ve
 `DEMO_SEED_ENABLED=true` koşullarını birlikte ister; production verisine karşı etkinleştirmeyin.
+Demo seed ile production bootstrap tamamen ayrıdır: demo seed development hesapları, zayıf demo
+parolaları ve development reference verisi oluşturur; bootstrap bunların hiçbirini oluşturmaz.
 
 ## Production topology notu
 

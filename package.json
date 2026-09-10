@@ -20,7 +20,8 @@
     "db:generate": "pnpm --filter @visitor-management/api db:generate",
     "db:migrate": "pnpm --filter @visitor-management/api db:migrate",
     "db:migrate:deploy": "pnpm --filter @visitor-management/api db:migrate:deploy",
-    "db:seed": "pnpm --filter @visitor-management/api db:seed"
+    "db:seed": "pnpm --filter @visitor-management/api db:seed",
+    "db:bootstrap": "pnpm --filter @visitor-management/api db:bootstrap"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
