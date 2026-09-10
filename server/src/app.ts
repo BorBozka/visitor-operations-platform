@@ -25,7 +25,7 @@ import { registerTransportAssignmentRoutes } from "./modules/transport-assignmen
 import { TransportAssignmentService } from "./modules/transport-assignments/service.js"
 import { registerReportsRoutes } from "./modules/reports/routes.js"
 import { ReportsService } from "./modules/reports/service.js"
-import { registerSecurityPlugins } from "./plugins/security.js"
+import { RateLimitError, registerSecurityPlugins } from "./plugins/security.js"
 import type { EmailSender } from "./delivery/email-sender.js"
 import type { AuthRepository } from "./repositories/auth-repository.js"
 import type { OrganizationRepository } from "./repositories/organization-repository.js"
@@ -38,9 +38,9 @@ import type { ResourceAssignmentRepository } from "./repositories/resource-assig
 import type { TransportAssignmentRepository } from "./repositories/transport-assignment-repository.js"
 import type { ReportsRepository } from "./repositories/reports-repository.js"
 
-/** A throttle raised by `@fastify/rate-limit`: a plain `Error` whose only contract is `statusCode`. */
+/** Only the error branded by the rate-limit plugin adapter may become RATE_LIMITED. */
 function isRateLimitError(error: unknown): boolean {
-  return error instanceof Error && (error as { statusCode?: unknown }).statusCode === 429
+  return error instanceof RateLimitError && error.statusCode === 429
 }
 
 /**
@@ -94,9 +94,8 @@ export async function buildApp(config: AppConfig, dependencies: AppDependencies)
   app.decorateRequest("currentUser", null)
   await registerSecurityPlugins(app, config)
 
-  // `@fastify/rate-limit` raises a throttled request as a plain `Error` carrying only
-  // `statusCode: 429` — never an `ApiError` — so it would otherwise be sanitized into a generic
-  // 500 and the client would see a server fault instead of a throttle. Fastify's own body-parser
+  // `@fastify/rate-limit` raises a throttled request through the branded adapter configured in
+  // `registerSecurityPlugins`; only that branded 429 is mapped to RATE_LIMITED. Fastify's own body-parser
   // and content-type errors have the same problem: they are raised before the route (and its Zod
   // schema) ever runs, and carry a genuine client status the app was discarding. Both are mapped
   // onto the app's own envelope through explicit allow-lists — the rate-limit status, and the

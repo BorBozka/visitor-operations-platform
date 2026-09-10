@@ -10,11 +10,8 @@ import { ApiError } from "./lib/api-error.js"
  * The global error handler's HTTP contract (NEW-11, NEW-12).
  *
  * `@fastify/rate-limit` writes its `retry-after`/`x-ratelimit-*` headers onto the reply and then
- * throws a plain `Error` carrying only `statusCode: 429`. Because that error is not an `ApiError`,
- * the handler used to sanitize it into a generic `500 INTERNAL_ERROR`, leaving the headers correct
- * but the status/body wrong — so the frontend's `status === 429` classification never fired at
- * runtime. The handler now maps 429 explicitly while still collapsing genuinely unexpected
- * exceptions into the generic 500 envelope.
+ * throws the branded error returned by its `errorResponseBuilder`. The handler maps only that
+ * branded 429 while still collapsing genuinely unexpected exceptions into the generic 500 envelope.
  *
  * Fastify's own body-parser and content-type errors (NEW-12) hit the same handler before any route
  * or Zod schema runs, carrying a real client status the app used to discard. Only the named
@@ -124,6 +121,22 @@ describe("global error handler", () => {
 
     expect(response.statusCode).toBe(500)
     expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
+  })
+
+  it("still sanitizes an arbitrary non-limiter 429 error", async () => {
+    const app = await buildApp(configFor(), { authRepository: new InMemoryAuthRepository() })
+    apps.push(app)
+    app.get("/api/testing/arbitrary-429", async () => {
+      const error = new Error("internal failure") as Error & { statusCode: number }
+      error.statusCode = 429
+      throw error
+    })
+
+    const response = await app.inject({ method: "GET", url: "/api/testing/arbitrary-429" })
+
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "Beklenmeyen bir sunucu hatası oluştu." } })
+    expect(response.body).not.toContain("internal failure")
   })
 
   it("still sanitizes an error that borrows a framework code but not its status", async () => {
