@@ -623,11 +623,11 @@ Primary actions:
 ### Security Goods Movements
 
 Security sees only today's `PLANNED` goods movements in its current company/facility scope;
-there is no company/facility selector, record creation, editing, cancellation, date filter, or
-pagination workflow on this operational screen. Inbound and outbound movements are presented
-separately. Within each direction, time-scheduled records whose planned datetime has passed are
-shown first as delayed, followed by the remaining records in planned-time order; records with no
-planned time remain in the latter group after timed records.
+there is no company/facility selector, editing, cancellation, date filter, or pagination workflow
+on this operational screen. Inbound and outbound movements are presented separately. Within each
+direction, time-scheduled records whose planned datetime has passed are shown first as delayed,
+followed by the remaining records in planned-time order; records with no planned time remain in
+the latter group after timed records.
 
 Security can search counterparty, goods description, and reference number. Completing an inbound
 record means arrival; completing an outbound record means departure. A Security completion may
@@ -635,6 +635,16 @@ capture an optional actual plate and driver name, records a service-generated ac
 and changes the shared goods-movement record from `PLANNED` to `COMPLETED`. The operation rejects
 out-of-scope or non-planned records. Manager, Dashboard, and reporting views continue to read the
 same completed record.
+
+Security may also record a "Plansız mal hareketi" (unplanned goods movement) for a delivery or
+departure happening at the gate right now, with no prior plan: direction, counterparty
+name/description (required), an optional reference number, and an optional actual plate/driver
+name. This creates and completes the record atomically — it is dated/timed to the moment of
+creation and stored as `COMPLETED` immediately, so it never appears in the operational
+PLANNED-only lists above. Company/facility are always Security's own resolved scope, never chosen
+in the dialog, and the request is rejected if that scope doesn't match the authenticated Security
+user's authorization scope. Manager, Dashboard, and reporting views read the same record like any
+other completed goods movement.
 
 ---
 

@@ -1,6 +1,6 @@
 import { apiClient } from "@/lib/http"
 import type { GoodsMovement, GoodsMovementInput } from "@/domain/goods-movements"
-import type { CompleteGoodsMovementInput, GoodsMovementService } from "@/services/goods-movement-service"
+import type { CompleteGoodsMovementInput, GoodsMovementService, UnplannedGoodsMovementInput } from "@/services/goods-movement-service"
 
 /**
  * Goods movements. Manager/Admin planning uses `/api/goods-movements`; the Security desk uses
@@ -34,5 +34,9 @@ export class HttpGoodsMovementService implements GoodsMovementService {
 
   completeGoodsMovement(id: string, input: CompleteGoodsMovementInput): Promise<GoodsMovement> {
     return apiClient.post<GoodsMovement>(`/security/goods-movements/${encodeURIComponent(id)}/complete`, input)
+  }
+
+  createUnplannedGoodsMovement(input: UnplannedGoodsMovementInput): Promise<GoodsMovement> {
+    return apiClient.post<GoodsMovement>("/security/goods-movements/unplanned", input)
   }
 }

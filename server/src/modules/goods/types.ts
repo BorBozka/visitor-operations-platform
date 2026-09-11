@@ -50,6 +50,23 @@ export interface CompleteGoodsMovementInput {
   actualDriverName?: string
 }
 
+/**
+ * Security desk unplanned goods movement: created and completed atomically for a movement
+ * happening at the gate right now, with no prior plan. `companyId`/`facilityId` come from the
+ * frontend scope context and are NOT trusted: the service verifies them against the
+ * authenticated Security user's authorization scope, mirroring `CompleteGoodsMovementInput`.
+ */
+export interface UnplannedGoodsMovementInput {
+  direction: GoodsMovementDirection
+  companyId: string
+  facilityId: string
+  counterpartyName: string
+  goodsDescription: string
+  referenceNumber?: string
+  actualPlate?: string
+  actualDriverName?: string
+}
+
 export const GOODS_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
 
 export function normalizeOptionalText(value: string | undefined): string | undefined {

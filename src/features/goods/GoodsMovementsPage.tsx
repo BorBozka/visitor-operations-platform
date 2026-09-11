@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { startOfDay, endOfDay } from "date-fns"
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpFromLine, ChevronDown, FilterX, Pencil, Plus, Search, XCircle } from "lucide-react"
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpFromLine, ChevronDown, FilterX, Pencil, Search, XCircle } from "lucide-react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { Button } from "@/components/ui/button"
@@ -22,12 +22,11 @@ import { useFillViewportHeight } from "@/lib/use-fill-viewport-height"
 import { cn } from "@/lib/utils"
 import { goodsMovementService } from "@/services"
 
-const empty = { direction: "", companyId: "", facilityId: "", plannedDate: "", plannedTime: "", counterpartyName: "", goodsDescription: "", referenceNumber: "", note: "" } as unknown as GoodsMovementFormValues
 type Filters = { query: string; from: string; to: string; companyId: string; facilityId: string; direction: "all" | GoodsMovementDirection; status: "all" | "PLANNED" | "COMPLETED" | "CANCELLED" | "LATE" }
 const initialFilters: Filters = { query: "", from: "", to: "", companyId: "all", facilityId: "all", direction: "all", status: "all" }
 
 export function GoodsMovementsPage() {
-  const { referenceData, isLoading } = useVisits(); const [movements, setMovements] = useState<GoodsMovement[]>([]); const [filters, setFilters] = useState<Filters>(initialFilters); const [sorts, setSorts] = useState<Sort[]>([]); const [page, setPage] = useState(1); const [editing, setEditing] = useState<GoodsMovement | null>(null); const [viewing, setViewing] = useState<GoodsMovement | null>(null); const [formOpen, setFormOpen] = useState(false); const [error, setError] = useState<string | null>(null); const [now] = useState(() => new Date()); const [movementsLoading, setMovementsLoading] = useState(true); const [loadError, setLoadError] = useState<string | null>(null); const [reloadToken, setReloadToken] = useState(0)
+  const { referenceData, isLoading } = useVisits(); const [movements, setMovements] = useState<GoodsMovement[]>([]); const [filters, setFilters] = useState<Filters>(initialFilters); const [sorts, setSorts] = useState<Sort[]>([]); const [page, setPage] = useState(1); const [editing, setEditing] = useState<GoodsMovement | null>(null); const [viewing, setViewing] = useState<GoodsMovement | null>(null); const [error, setError] = useState<string | null>(null); const [now] = useState(() => new Date()); const [movementsLoading, setMovementsLoading] = useState(true); const [loadError, setLoadError] = useState<string | null>(null); const [reloadToken, setReloadToken] = useState(0)
   // A rejected list load must never render as a real "no records" result, so it keeps its own state.
   useEffect(() => {
     let cancelled = false
@@ -64,7 +63,7 @@ export function GoodsMovementsPage() {
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">MAL HAREKETİ FİLTRELERİ</span>
           {activeFilters && <Button type="button" variant="ghost" size="sm" className="h-5 gap-1 border-none px-1 text-[11px] font-medium text-slate-500 shadow-none hover:bg-transparent hover:text-slate-900" onClick={() => { setFilters(initialFilters); setSorts([]) }}><FilterX className="size-3 text-slate-500" />Filtreleri temizle</Button>}
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(180px,1.3fr)_repeat(7,minmax(105px,1fr))_auto]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(180px,1.3fr)_repeat(7,minmax(105px,1fr))]">
           <FilterField label="Arama" htmlFor="goods-search" className="sm:col-span-2 xl:col-span-1"><div className="relative"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input id="goods-search" value={filters.query} onChange={(event) => update("query", event.target.value)} placeholder="Mal veya karşı firma ara" className="h-9 pl-8 text-xs" /></div></FilterField>
           <FilterField label="Başlangıç" htmlFor="goods-from"><Input id="goods-from" type="date" value={filters.from} onChange={(event) => update("from", event.target.value)} className="h-9 text-xs" /></FilterField>
           <FilterField label="Bitiş" htmlFor="goods-to"><Input id="goods-to" type="date" value={filters.to} onChange={(event) => update("to", event.target.value)} className="h-9 text-xs" /></FilterField>
@@ -73,7 +72,6 @@ export function GoodsMovementsPage() {
           <FilterField label="Tesis" htmlFor="goods-facility"><FilterSelect id="goods-facility" value={filters.facilityId} emptyLabel="Tüm tesisler" options={facilities.map((item) => ({ value: item.id, label: item.name }))} onValueChange={(value) => update("facilityId", value)} /></FilterField>
           <FilterField label="Yön" htmlFor="goods-direction"><FilterSelect id="goods-direction" value={filters.direction} emptyLabel="Tüm yönler" options={[{ value: "INBOUND", label: "Gelen" }, { value: "OUTBOUND", label: "Giden" }]} onValueChange={(value) => update("direction", value as Filters["direction"])} /></FilterField>
           <FilterField label="Durum" htmlFor="goods-status"><FilterSelect id="goods-status" value={filters.status} emptyLabel="Tüm durumlar" options={[{ value: "PLANNED", label: "Planlı" }, { value: "LATE", label: "Gecikti" }, { value: "COMPLETED", label: "Tamamlandı" }, { value: "CANCELLED", label: "İptal" }]} onValueChange={(value) => update("status", value as Filters["status"])} /></FilterField>
-          <div className="flex flex-col justify-end"><Button type="button" className="h-9 w-full gap-1 text-xs" onClick={() => { setEditing(null); setError(null); setFormOpen(true) }}><Plus className="size-3.5" />Yeni kayıt</Button></div>
         </div>
       </section>
       {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
@@ -83,8 +81,8 @@ export function GoodsMovementsPage() {
       <PaginationFooter page={visiblePage} pageCount={pageCount} visibleStart={visibleStart} visibleEnd={visibleEnd} total={filteredRows.length} visiblePageNumbers={getVisibleGoodsPageNumbers(visiblePage, pageCount)} onPageChange={setPage} ariaLabel="Mal hareketleri sayfaları" />
       </section>
       </div>
-      <GoodsForm open={formOpen} movement={editing} references={referenceData} onOpenChange={setFormOpen} onSave={(saved) => { setMovements((current) => editing ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]); setFormOpen(false) }} />
-      <Details movement={viewing} onOpenChange={(open) => !open && setViewing(null)} onEdit={(item) => { setViewing(null); setEditing(item); setFormOpen(true) }} onCancel={cancel} />
+      <GoodsForm movement={editing} references={referenceData} onOpenChange={(open) => !open && setEditing(null)} onSave={(saved) => { setMovements((current) => current.map((item) => item.id === saved.id ? saved : item)); setEditing(null) }} />
+      <Details movement={viewing} onOpenChange={(open) => !open && setViewing(null)} onEdit={(item) => { setViewing(null); setError(null); setEditing(item) }} onCancel={cancel} />
       </div>
     </>
   )
@@ -102,8 +100,8 @@ function SortButton({ label, field, sorts, onToggle }: { label: string; field: S
 function Direction({ direction }: { direction: GoodsMovementDirection }) { const Icon = direction === "INBOUND" ? ArrowDownToLine : ArrowUpFromLine; return <span className="inline-flex items-center gap-1 font-medium"><Icon className={cn("size-3.5", direction === "INBOUND" ? "text-emerald-700" : "text-blue-700")} />{getGoodsDirectionLabel(direction)}</span> }
 function Status({ movement }: { movement: GoodsMovement }) { const status = getGoodsMovementDisplayStatus(movement); const labels = { PLANNED: "Planlı", LATE: "Gecikti", COMPLETED: getGoodsCompletionLabel(movement.direction), CANCELLED: "İptal" }; return <span className={cn("rounded-full px-2 py-1 text-[10px] font-semibold", status === "LATE" ? "bg-amber-50 text-amber-700" : status === "COMPLETED" ? "bg-emerald-50 text-emerald-700" : status === "CANCELLED" ? "bg-slate-200 text-slate-600" : "bg-blue-50 text-blue-700")}>{labels[status]}</span> }
 function formatPlanned(movement: GoodsMovement, pattern = "d MMM") { return `${formatTr(new Date(`${movement.plannedDate}T12:00:00`), pattern)} · ${movement.plannedTime ?? "Saat belirtilmedi"}` }
-function GoodsForm({ open, movement, references, onOpenChange, onSave }: { open: boolean; movement: GoodsMovement | null; references: { companies: { id: string; name: string }[]; facilities: { id: string; name: string; companyId: string }[] }; onOpenChange(open: boolean): void; onSave(movement: GoodsMovement): void }) {
-  const formValues = movement ? { direction: movement.direction, companyId: movement.companyId, facilityId: movement.facilityId, plannedDate: movement.plannedDate, plannedTime: movement.plannedTime ?? "", counterpartyName: movement.counterpartyName, goodsDescription: movement.goodsDescription, referenceNumber: movement.referenceNumber ?? "", note: movement.note ?? "" } : empty
+function GoodsForm({ movement, references, onOpenChange, onSave }: { movement: GoodsMovement | null; references: { companies: { id: string; name: string }[]; facilities: { id: string; name: string; companyId: string }[] }; onOpenChange(open: boolean): void; onSave(movement: GoodsMovement): void }) {
+  const formValues = movement ? { direction: movement.direction, companyId: movement.companyId, facilityId: movement.facilityId, plannedDate: movement.plannedDate, plannedTime: movement.plannedTime ?? "", counterpartyName: movement.counterpartyName, goodsDescription: movement.goodsDescription, referenceNumber: movement.referenceNumber ?? "", note: movement.note ?? "" } : undefined
   const { register, handleSubmit, watch, reset, setValue, formState: { errors, isSubmitting } } = useForm<GoodsMovementFormValues>({ resolver: zodResolver(goodsMovementFormSchema), values: formValues })
   const direction = watch("direction")
   const companyId = watch("companyId")
@@ -113,25 +111,25 @@ function GoodsForm({ open, movement, references, onOpenChange, onSave }: { open:
   const noteRef = useRef<HTMLTextAreaElement | null>(null)
   const facilities = references.facilities.filter((item) => item.companyId === companyId)
   useLayoutEffect(() => {
-    if (!open || !noteRef.current) return
+    if (!movement || !noteRef.current) return
     noteRef.current.style.height = "auto"
     noteRef.current.style.height = `${Math.min(noteRef.current.scrollHeight, 96)}px`
-  }, [movement?.id, note, open])
+  }, [movement, note])
   const submit = async (values: GoodsMovementFormValues) => {
+    if (!movement) return
     const input: GoodsMovementInput = { ...values, plannedTime: values.plannedTime || undefined }
-    const saved = movement ? await goodsMovementService.updateGoodsMovement(movement.id, input) : await goodsMovementService.createGoodsMovement(input)
+    const saved = await goodsMovementService.updateGoodsMovement(movement.id, input)
     onSave(saved)
-    reset(empty)
   }
   const changeOpen = (nextOpen: boolean) => {
-    if (!nextOpen) reset(formValues)
+    if (!nextOpen && formValues) reset(formValues)
     onOpenChange(nextOpen)
   }
   return (
-    <Dialog open={open} onOpenChange={changeOpen}>
+    <Dialog open={Boolean(movement)} onOpenChange={changeOpen}>
       <InternalDialogContent className="!max-h-[85vh] !w-[min(680px,calc(100vw-2rem))] !max-w-none flex flex-col gap-0 overflow-hidden p-0" aria-describedby={undefined}>
         <DialogHeader className="shrink-0 border-b bg-white px-5 pb-3 pt-4 pr-12">
-          <DialogTitle className="text-lg font-semibold text-slate-900">{movement ? "Mal hareketini düzenle" : "Yeni mal hareketi"}</DialogTitle>
+          <DialogTitle className="text-lg font-semibold text-slate-900">Mal hareketini düzenle</DialogTitle>
         </DialogHeader>
         <form id="goods-movement-form" className="grid min-h-0 flex-1 gap-3 overflow-y-auto px-5 py-4 sm:grid-cols-2" onSubmit={handleSubmit(submit)} noValidate>
           <Field label="Yön" required error={errors.direction?.message}><Select {...register("direction")}><option value="" disabled hidden>Yön seçin</option><option value="INBOUND">Gelen</option><option value="OUTBOUND">Giden</option></Select></Field>
@@ -146,7 +144,7 @@ function GoodsForm({ open, movement, references, onOpenChange, onSave }: { open:
         </form>
         <DialogFooter className="shrink-0 border-t bg-card px-5 py-3 sm:items-center">
           <Button type="button" variant="outline" onClick={() => changeOpen(false)}>Vazgeç</Button>
-          <Button disabled={isSubmitting} type="submit" form="goods-movement-form">{movement ? "Kaydet" : "Kaydı oluştur"}</Button>
+          <Button disabled={isSubmitting} type="submit" form="goods-movement-form">Kaydet</Button>
         </DialogFooter>
       </InternalDialogContent>
     </Dialog>

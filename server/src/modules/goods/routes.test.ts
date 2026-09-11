@@ -20,14 +20,25 @@ const employee: SessionUser = {
   authorizationScope: { companyIds: ["c1"], facilityIds: ["f1"], securityGateIds: [] },
   employeeId: "e1",
 }
+const securityUser: SessionUser = {
+  id: "security-user",
+  username: "security",
+  fullName: "Security",
+  initials: "S",
+  role: "SECURITY",
+  roleLabel: "Güvenlik",
+  authenticationSource: "LOCAL",
+  authorizationScope: { companyIds: ["c1"], facilityIds: ["f1"], securityGateIds: [] },
+  employeeId: "e2",
+}
 
-async function createApp() {
+async function createApp(currentUser: SessionUser = employee) {
   const app = Fastify()
   apps.push(app)
   app.decorateRequest("currentUser", null)
-  const authenticate = async (request: { currentUser: SessionUser | null }) => { request.currentUser = employee }
+  const authenticate = async (request: { currentUser: SessionUser | null }) => { request.currentUser = currentUser }
   const guards: AuthGuards = { requireAuthentication: authenticate, requireRole: () => authenticate }
-  const repository = new InMemoryGoodsMovementRepository([], [{ companyId: "c1", facilityId: "f1" }])
+  const repository = new InMemoryGoodsMovementRepository([], [{ companyId: "c1", facilityId: "f1" }], { [securityUser.id]: securityUser.authorizationScope })
   await registerGoodsMovementRoutes(app, { service: new GoodsMovementService(repository), guards })
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ApiError) return reply.status(error.statusCode).send({ error: { code: error.code } })
@@ -62,5 +73,28 @@ describe("employee planned goods delivery routes", () => {
       payload: { direction: "INBOUND", companyId: "c1", facilityId: "f1", counterpartyName: "Tedarik", plannedDate: "2026-09-10", goodsDescription: "Palet", createdByUserId: "attacker" },
     })
     expect(response.statusCode).toBe(400)
+  })
+})
+
+describe("security unplanned goods movement route", () => {
+  it("creates and immediately completes an unplanned movement for the authenticated Security user", async () => {
+    const app = await createApp(securityUser)
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/security/goods-movements/unplanned",
+      payload: { direction: "OUTBOUND", companyId: "c1", facilityId: "f1", counterpartyName: "Nakliye", goodsDescription: "Sevkiyat" },
+    })
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({ direction: "OUTBOUND", status: "COMPLETED" })
+  })
+
+  it("rejects an out-of-scope company/facility", async () => {
+    const app = await createApp(securityUser)
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/security/goods-movements/unplanned",
+      payload: { direction: "INBOUND", companyId: "other-company", facilityId: "other-facility", counterpartyName: "Tedarik", goodsDescription: "Palet" },
+    })
+    expect(response.statusCode).toBe(403)
   })
 })

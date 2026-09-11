@@ -57,7 +57,7 @@ describe("SecurityOperationsPage contract", () => {
     expect(pageSource).not.toContain("Building2")
     expect(pageSource).not.toContain("companyName:")
     expect(pageSource).not.toContain("facilityName:")
-    expect(pageSource).toContain('className="flex shrink-0 items-center gap-2 py-1"')
+    expect(pageSource).toContain('className="flex shrink-0 items-center gap-2"')
     expect(pageSource).toContain('className="relative min-w-0 flex-1"')
     expect(pageSource).toContain('placeholder="Ziyaretçi, firma veya ev sahibi ara"')
   })

@@ -25,6 +25,16 @@ const completeBody = z.object({
   actualPlate: z.string().max(32).optional(),
   actualDriverName: z.string().max(200).optional(),
 }).strict()
+const unplannedBody = z.object({
+  direction: z.enum(goodsMovementDirections),
+  companyId: z.string().min(1).max(36),
+  facilityId: z.string().min(1).max(36),
+  counterpartyName: z.string().max(200),
+  goodsDescription: z.string().max(2_000),
+  referenceNumber: z.string().max(200).optional(),
+  actualPlate: z.string().max(32).optional(),
+  actualDriverName: z.string().max(200).optional(),
+}).strict()
 
 function parsed<T>(result: z.SafeParseReturnType<unknown, T>): T {
   if (!result.success) throw validationError()
@@ -49,6 +59,8 @@ export async function registerGoodsMovementRoutes(app: FastifyInstance, dependen
 
   app.get("/api/security/goods-movements", { preHandler: securityGuard }, async (request) =>
     service.listSecurityOperational(request.currentUser!.id))
+  app.post("/api/security/goods-movements/unplanned", { preHandler: securityGuard }, async (request, reply) =>
+    reply.status(201).send(await service.createUnplanned(parsed(unplannedBody.safeParse(request.body)), request.currentUser!.id)))
   app.post("/api/security/goods-movements/:id/complete", { preHandler: securityGuard }, async (request) =>
     service.complete(parsed(idParams.safeParse(request.params)).id, request.currentUser!.id, parsed(completeBody.safeParse(request.body))))
 }

@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { GoodsMovement } from "@/domain/goods-movements"
+import { SecurityUnplannedGoodsMovementDialog } from "@/features/security/SecurityUnplannedGoodsMovementDialog"
 import { useVisits } from "@/features/visits/visit-context"
 import { cn } from "@/lib/utils"
 import { goodsMovementService } from "@/services"
@@ -27,6 +28,7 @@ export function SecurityGoodsMovementsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [completionTarget, setCompletionTarget] = useState<GoodsMovement | null>(null)
+  const [unplannedOpen, setUnplannedOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -61,11 +63,14 @@ export function SecurityGoodsMovementsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
       <h1 className="sr-only">Güvenlik Mal Hareketleri</h1>
-      <label className="relative shrink-0">
-        <span className="sr-only">Firma, mal veya referans ara</span>
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-        <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Firma, mal veya referans ara" aria-label="Firma, mal veya referans ara" className="h-9 border-slate-200/70 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0" />
-      </label>
+      <div className="flex shrink-0 items-center gap-2">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Firma, mal veya referans ara</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Firma, mal veya referans ara" aria-label="Firma, mal veya referans ara" className="h-9 border-slate-300 bg-white pl-9 shadow-none transition-colors placeholder:text-slate-500 focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-blue-100 focus-visible:ring-offset-0" />
+        </label>
+        <Button type="button" className="h-9 shrink-0" disabled={!scope} onClick={() => setUnplannedOpen(true)}>+ Plansız mal hareketi</Button>
+      </div>
 
       <div className="grid min-h-0 flex-1 grid-rows-2 gap-3 overflow-hidden lg:grid-cols-2 lg:grid-rows-1">
         <GoodsPanel title="Gelenler" groups={panels.inbound} loading={loading} error={error} search={search} emptyMessage="Bugün beklenen gelen hareket yok." onComplete={setCompletionTarget} />
@@ -73,6 +78,12 @@ export function SecurityGoodsMovementsPage() {
       </div>
 
       <SecurityGoodsCompletionDialog movement={completionTarget} open={completionTarget !== null} onOpenChange={(open) => { if (!open) setCompletionTarget(null) }} onComplete={completeMovement} />
+      {scope && <SecurityUnplannedGoodsMovementDialog
+        open={unplannedOpen}
+        onOpenChange={setUnplannedOpen}
+        onCreated={(movement) => setMovements((current) => [...current, movement])}
+        scope={scope}
+      />}
     </div>
   )
 }

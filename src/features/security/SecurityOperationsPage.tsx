@@ -97,7 +97,7 @@ export function SecurityOperationsPage() {
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
       <h1 className="sr-only">Güvenlik Operasyonu</h1>
 
-      <div className="flex shrink-0 items-center gap-2 py-1">
+      <div className="flex shrink-0 items-center gap-2">
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Beklenen ve içerideki ziyaretlerde ara</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />

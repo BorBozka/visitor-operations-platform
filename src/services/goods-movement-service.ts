@@ -1,9 +1,21 @@
-import type { GoodsMovement, GoodsMovementInput } from "@/domain/goods-movements"
+import type { GoodsMovement, GoodsMovementDirection, GoodsMovementInput } from "@/domain/goods-movements"
 
 export interface CompleteGoodsMovementInput {
   /** Security's resolved authorization scope; never chosen from the operations UI. */
   companyId: string
   facilityId: string
+  actualPlate?: string
+  actualDriverName?: string
+}
+
+export interface UnplannedGoodsMovementInput {
+  direction: GoodsMovementDirection
+  /** Security's resolved authorization scope; never chosen from the operations UI. */
+  companyId: string
+  facilityId: string
+  counterpartyName: string
+  goodsDescription: string
+  referenceNumber?: string
   actualPlate?: string
   actualDriverName?: string
 }
@@ -23,4 +35,9 @@ export interface GoodsMovementService {
   cancelGoodsMovement(id: string): Promise<GoodsMovement>
   /** Security desk operation. Only a scoped PLANNED record may be completed. */
   completeGoodsMovement(id: string, input: CompleteGoodsMovementInput): Promise<GoodsMovement>
+  /**
+   * Security desk operation: creates and immediately completes a goods movement happening at
+   * the gate right now, with no prior plan.
+   */
+  createUnplannedGoodsMovement(input: UnplannedGoodsMovementInput): Promise<GoodsMovement>
 }

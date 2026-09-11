@@ -9,6 +9,7 @@ import {
   normalizeOptionalText,
   type CompleteGoodsMovementInput,
   type GoodsMovementInput,
+  type UnplannedGoodsMovementInput,
 } from "./types.js"
 
 const STATE_CONFLICT = "GOODS_MOVEMENT_NOT_EDITABLE"
@@ -109,6 +110,40 @@ export class GoodsMovementService {
     return result
   }
 
+  /**
+   * Security desk unplanned goods movement: creates and immediately completes a record for a
+   * movement happening at the gate right now (no prior plan). Scope is verified the same way as
+   * `complete` — the frontend-supplied companyId/facilityId must fall within the authenticated
+   * Security user's authorization scope.
+   */
+  async createUnplanned(input: UnplannedGoodsMovementInput, userId: string) {
+    const scope = await this.requireScope(userId)
+    if (!isWithinAuthorizationScope(scope, { companyId: input.companyId, facilityId: input.facilityId })) {
+      throw new ApiError(403, "GOODS_MOVEMENT_OUT_OF_SCOPE", "Bu şirket/tesis yetki kapsamınız dışında.")
+    }
+    const now = this.now()
+    const created = await this.repository.create({
+      ...await this.validate({
+        direction: input.direction,
+        companyId: input.companyId,
+        facilityId: input.facilityId,
+        counterpartyName: input.counterpartyName,
+        plannedDate: toLocalDateKey(now),
+        plannedTime: toLocalTimeKey(now),
+        goodsDescription: input.goodsDescription,
+        referenceNumber: input.referenceNumber,
+      }),
+      createdByUserId: userId,
+    })
+    const completed = await this.repository.complete(created.id, {
+      actualAt: now,
+      actualPlate: normalizeOptionalText(input.actualPlate),
+      actualDriverName: normalizeOptionalText(input.actualDriverName),
+    })
+    if (!completed) throw new ApiError(409, STATE_CONFLICT, "Mal hareketi kaydedilemedi.")
+    return completed
+  }
+
   private async require(id: string) {
     const movement = await this.repository.find(id)
     if (!movement) throw new ApiError(404, "NOT_FOUND", "Mal hareketi bulunamadı.")
@@ -156,4 +191,10 @@ function toLocalDateKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0")
   const day = String(date.getDate()).padStart(2, "0")
   return `${year}-${month}-${day}`
+}
+
+function toLocalTimeKey(date: Date): string {
+  const hours = String(date.getHours()).padStart(2, "0")
+  const minutes = String(date.getMinutes()).padStart(2, "0")
+  return `${hours}:${minutes}`
 }

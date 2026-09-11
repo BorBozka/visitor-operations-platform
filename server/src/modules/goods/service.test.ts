@@ -161,6 +161,68 @@ describe("GoodsMovementService security completion", () => {
   })
 })
 
+describe("GoodsMovementService security unplanned creation", () => {
+  it("creates and immediately completes a movement dated/timed to now, within the Security user's scope", async () => {
+    const now = new Date("2026-09-02T08:15:00.000Z")
+    const { service } = makeService({ now })
+
+    const result = await service.createUnplanned({
+      direction: "OUTBOUND",
+      companyId: "bplas",
+      facilityId: "bplas-merkez",
+      counterpartyName: " Nakliye A.Ş. ",
+      goodsDescription: " Sevkiyat ",
+      actualPlate: " 34 abc 12 ",
+      actualDriverName: "  Ali Veli  ",
+    }, "user-security")
+
+    expect(result).toMatchObject({
+      direction: "OUTBOUND",
+      counterpartyName: "Nakliye A.Ş.",
+      goodsDescription: "Sevkiyat",
+      status: "COMPLETED",
+      actualAt: now.toISOString(),
+      actualPlate: "34 abc 12",
+      actualDriverName: "Ali Veli",
+    })
+    expect(result.plannedDate).toBe(toLocalKey(now))
+    expect(result.plannedTime).toBe(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`)
+  })
+
+  it("rejects a company/facility outside the Security user's authorization scope", async () => {
+    const { service } = makeService()
+    await expect(service.createUnplanned({
+      direction: "INBOUND",
+      companyId: "bplas",
+      facilityId: "bplas-ege",
+      counterpartyName: "Tedarik",
+      goodsDescription: "Palet",
+    }, "user-security")).rejects.toMatchObject({ code: "GOODS_MOVEMENT_OUT_OF_SCOPE" })
+  })
+
+  it("rejects for a user with no resolvable scope", async () => {
+    const { service } = makeService()
+    await expect(service.createUnplanned({
+      direction: "INBOUND",
+      companyId: "bplas",
+      facilityId: "bplas-merkez",
+      counterpartyName: "Tedarik",
+      goodsDescription: "Palet",
+    }, "user-unknown")).rejects.toMatchObject({ code: "GOODS_MOVEMENT_OUT_OF_SCOPE" })
+  })
+
+  it("rejects missing counterparty/description", async () => {
+    const { service } = makeService()
+    await expect(service.createUnplanned({
+      direction: "INBOUND",
+      companyId: "bplas",
+      facilityId: "bplas-merkez",
+      counterpartyName: " ",
+      goodsDescription: "Palet",
+    }, "user-security")).rejects.toMatchObject({ code: "VALIDATION_ERROR" })
+  })
+})
+
 describe("GoodsMovementService security operational list", () => {
   it("returns only today's PLANNED movements inside the user's scope", async () => {
     const now = new Date("2026-09-02T07:00:00.000Z")
