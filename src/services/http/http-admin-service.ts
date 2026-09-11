@@ -114,6 +114,10 @@ export class HttpAdminService implements AdminService {
     return mapVisitType(saved)
   }
 
+  async deleteVisitType(id: string): Promise<void> {
+    await apiClient.delete<void>(`/visit-types/${encodeURIComponent(id)}`)
+  }
+
   async getVisitorCards(): Promise<VisitorCardInventoryItem[]> {
     return (await apiClient.get<VisitorCardDto[]>("/admin/visitor-cards")).map(mapVisitorCard)
   }

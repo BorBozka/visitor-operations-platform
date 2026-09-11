@@ -16,6 +16,7 @@ interface AdminContextValue {
   settings: OperationalSettings | null
   reload(): Promise<void>
   saveOrganizationEntity(kind: OrganizationKind, entity: Omit<OrganizationEntity, "id"> & { id?: string }): Promise<OrganizationEntity>
+  deleteVisitType(id: string): Promise<void>
   markVisitorCardLost(id: string): Promise<VisitorCardInventoryItem>
   restoreVisitorCard(id: string): Promise<VisitorCardInventoryItem>
   deleteVisitorCard(id: string): Promise<void>
@@ -42,6 +43,10 @@ export function AdminProvider({ service, children }: { service: AdminService; ch
     await loader.commitIfCurrent(() => service.getOrganization(), (organization) => setData((previous) => ({ ...previous, organization })))
     return saved
   }, [loader, service])
+  const deleteVisitType = useCallback(async (id: string) => {
+    await service.deleteVisitType(id)
+    await loader.commitIfCurrent(() => service.getVisitTypes(), (visitTypes) => setData((previous) => ({ ...previous, visitTypes })))
+  }, [loader, service])
   const markVisitorCardLost = useCallback(async (id: string) => {
     const updated = await service.markVisitorCardLost(id)
     await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
@@ -56,7 +61,7 @@ export function AdminProvider({ service, children }: { service: AdminService; ch
     await service.deleteVisitorCard(id)
     await loader.commitIfCurrent(() => service.getVisitorCards(), (visitorCards) => setData((previous) => ({ ...previous, visitorCards })))
   }, [loader, service])
-  const value = useMemo(() => ({ ...data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard }), [data, reload, saveOrganizationEntity, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard])
+  const value = useMemo(() => ({ ...data, reload, saveOrganizationEntity, deleteVisitType, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard }), [data, reload, saveOrganizationEntity, deleteVisitType, markVisitorCardLost, restoreVisitorCard, deleteVisitorCard])
   return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>
 }
 

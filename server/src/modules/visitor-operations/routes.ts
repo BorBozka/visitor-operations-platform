@@ -27,6 +27,7 @@ export async function registerVisitorOperationsRoutes(app: FastifyInstance, depe
   app.post("/api/visit-types", { preHandler: adminGuard }, async (request, reply) => reply.status(201).send(await service.createVisitType(parsed(z.object({ name: z.string().max(200), active: z.boolean().default(true) }).strict().safeParse(request.body)))))
   app.patch("/api/visit-types/:id", { preHandler: adminGuard }, async (request) => service.updateVisitType(parsed(idParams.safeParse(request.params)).id, parsed(z.object({ name: z.string().max(200), active: z.boolean() }).strict().safeParse(request.body))))
   app.patch("/api/visit-types/:id/status", { preHandler: adminGuard }, async (request) => service.setVisitTypeActive(parsed(idParams.safeParse(request.params)).id, parsed(z.object({ active: z.boolean() }).strict().safeParse(request.body)).active))
+  app.delete("/api/visit-types/:id", { preHandler: adminGuard }, async (request, reply) => { await service.deleteVisitType(parsed(idParams.safeParse(request.params)).id); return reply.status(204).send() })
 
   app.get("/api/meetings", { preHandler: readGuard }, async (request) => service.listMeetings(toAccessContext(request.currentUser!)))
   app.get("/api/meetings/:id", { preHandler: planningGuard }, async (request) => service.getVisibleMeeting(parsed(idParams.safeParse(request.params)).id, toAccessContext(request.currentUser!)))

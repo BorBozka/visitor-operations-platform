@@ -51,4 +51,20 @@ describe("System settings workspace patterns", () => {
   it("draws a bottom border below the final visit type and visitor card rows", () => {
     expect(source.match(/<tbody className="divide-y border-b">/g)).toHaveLength(2)
   })
+
+  it("edits visit types and admin-managed visitor cards by clicking the row, not a separate button", () => {
+    expect(source).not.toContain(">Düzenle</Button>")
+    expect(source).toContain("record-row-hover")
+    expect(source).toMatch(/tr key=\{item\.id\} tabIndex=\{0\} onClick=\{\(\) => onEdit\(item\)\}/)
+    expect(source).toContain("editable ? () => onEdit(item) : undefined")
+  })
+
+  it("moves visit type and visitor card deletion behind their edit dialog instead of a row button", () => {
+    expect(source).toContain("<DeleteVisitTypeDialog")
+    expect(source).toContain("Ziyaret Türünü Sil")
+    expect(source).toContain('aria-label="Ziyaret türünü kalıcı olarak sil"')
+    expect(source).toContain('aria-label="Kartı kalıcı olarak sil"')
+    expect(source).toContain("deleteVisitType")
+    expect(source).not.toContain('title="Kartı kalıcı olarak sil"')
+  })
 })

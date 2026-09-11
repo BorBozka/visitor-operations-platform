@@ -151,6 +151,12 @@ export interface VisitorOperationsRepository {
   listVisitTypes(includeInactive: boolean): Promise<VisitTypeDto[]>
   findVisitType(id: string): Promise<VisitTypeDto | null>
   saveVisitType(input: { id?: string; name: string; nameNormalized: string; active: boolean }): Promise<VisitTypeDto>
+  /**
+   * Hard delete. `Meeting.visitTypeId` is required and ON DELETE NO ACTION, so a type ever used
+   * by any Meeting (open, closed, or cancelled) can never be deleted — returns false in that
+   * case rather than letting the database raise a foreign key error.
+   */
+  deleteVisitType(id: string): Promise<boolean>
   listMeetings(): Promise<MeetingDto[]>
   listVisits(): Promise<VisitDto[]>
   findMeeting(id: string): Promise<MeetingWithVisitsDto | null>
@@ -217,6 +223,13 @@ export class PrismaVisitorOperationsRepository implements VisitorOperationsRepos
 
   async listVisitTypes(includeInactive: boolean) { return (await this.prisma.visitType.findMany({ where: includeInactive ? {} : { active: true }, orderBy: { name: "asc" } })).map(toVisitType) }
   async findVisitType(id: string) { const row = await this.prisma.visitType.findUnique({ where: { id } }); return row ? toVisitType(row) : null }
+  async deleteVisitType(id: string) {
+    return withWriteConflictRetry(() => this.prisma.$transaction(async (tx) => {
+      if (await tx.meeting.count({ where: { visitTypeId: id } }) > 0) return false
+      await tx.visitType.delete({ where: { id } })
+      return true
+    }, { isolationLevel: "Serializable" }))
+  }
   async saveVisitType(input: { id?: string; name: string; nameNormalized: string; active: boolean }) { const row = input.id ? await this.prisma.visitType.update({ where: { id: input.id }, data: input }) : await this.prisma.visitType.create({ data: input }); return toVisitType(row) }
   async listMeetings() { const rows = await this.prisma.meeting.findMany({ include: meetingInclude, orderBy: { plannedStart: "asc" } }); return rows.map(toMeeting) }
   async listVisits() { return (await this.prisma.visit.findMany({ include: visitInclude, orderBy: { createdAt: "asc" } })).map(toVisit) }

@@ -24,7 +24,7 @@ class FakeEmailSender implements EmailSender {
 
 function unusedRepository(overrides: Record<string, unknown>): VisitorOperationsRepository {
   return {
-    listVisitTypes: async () => [], findVisitType: async () => null, saveVisitType: async () => { throw new Error("unused") }, listMeetings: async () => [], listVisits: async () => [], findMeeting: async () => null, findVisit: async () => null,
+    listVisitTypes: async () => [], findVisitType: async () => null, saveVisitType: async () => { throw new Error("unused") }, deleteVisitType: async () => { throw new Error("unused") }, listMeetings: async () => [], listVisits: async () => [], findMeeting: async () => null, findVisit: async () => null,
     findEmployeeByUserId: async () => null, findEmployeeById: async () => null, findActiveEmployeeByName: async () => null, getReferenceData: async () => ({}), createMeeting: async () => { throw new Error("unused") }, updateMeeting: async () => { throw new Error("unused") }, updateMeetingTimes: async () => undefined, extendMeetingTimes: async () => undefined, cancelVisit: async () => undefined, cancelMeeting: async () => undefined, closeMeeting: async () => undefined,
     prepareInvitation: async () => { throw new Error("unused") }, finishInvitation: async () => undefined, findPublicPreRegistration: async () => null, updatePublicVisitor: async () => undefined, acceptPublicRule: async () => { throw new Error("unused") }, listRules: async () => [], getActiveRule: async () => null, publishRule: async () => { throw new Error("unused") }, listCards: async () => [], findCard: async () => null, saveCard: async () => { throw new Error("unused") }, updateCard: async () => { throw new Error("unused") }, setCardStatus: async () => { throw new Error("unused") }, deleteCard: async () => undefined, checkIn: async () => { throw new Error("unused") }, checkOut: async () => undefined, listUnreturnedIssues: async () => [], lateReturn: async () => undefined, createUnplanned: async () => { throw new Error("unused") }, correctVisitor: async () => undefined,
     ...overrides,
@@ -64,6 +64,37 @@ describe("VisitorOperationsService card deletion", () => {
     }), new FakeEmailSender(), "https://web.example.test")
 
     await expect(service.deleteCard("card-1")).rejects.toMatchObject({ statusCode: 409, code: "CARD_STATE_CONFLICT" })
+  })
+})
+
+describe("VisitorOperationsService visit type deletion", () => {
+  it("deletes a visit type never used by any meeting", async () => {
+    const deleted: string[] = []
+    const service = new VisitorOperationsService(unusedRepository({
+      findVisitType: async () => ({ id: "type-1", name: "Denetim", active: true, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      deleteVisitType: async (id: string) => { deleted.push(id); return true },
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteVisitType("type-1")).resolves.toBeUndefined()
+    expect(deleted).toEqual(["type-1"])
+  })
+
+  it("refuses to delete a visit type any meeting has ever used", async () => {
+    const service = new VisitorOperationsService(unusedRepository({
+      findVisitType: async () => ({ id: "type-1", name: "Denetim", active: true, createdAt: now.toISOString(), updatedAt: now.toISOString() }),
+      deleteVisitType: async () => false,
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteVisitType("type-1")).rejects.toMatchObject({ statusCode: 409, code: "VISIT_TYPE_IN_USE" })
+  })
+
+  it("rejects deleting a non-existent visit type", async () => {
+    const service = new VisitorOperationsService(unusedRepository({
+      findVisitType: async () => null,
+      deleteVisitType: async () => { throw new Error("must not delete") },
+    }), new FakeEmailSender(), "https://web.example.test")
+
+    await expect(service.deleteVisitType("missing")).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" })
   })
 })
 

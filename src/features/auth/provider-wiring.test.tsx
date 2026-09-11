@@ -178,6 +178,7 @@ function createFakeAdminService() {
     resetLocalUserPassword: notCalled("resetLocalUserPassword"),
     saveOrganizationEntity: notCalled("saveOrganizationEntity"),
     saveVisitType: notCalled("saveVisitType"),
+    deleteVisitType: notCalled("deleteVisitType"),
     createVisitorCard: notCalled("createVisitorCard"),
     updateVisitorCardInventory: notCalled("updateVisitorCardInventory"),
     markVisitorCardLost: notCalled("markVisitorCardLost"),

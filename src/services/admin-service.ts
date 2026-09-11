@@ -20,6 +20,8 @@ export interface AdminService {
   saveOrganizationEntity(kind: OrganizationKind, entity: Omit<OrganizationEntity, "id"> & { id?: string }): Promise<OrganizationEntity>
   getVisitTypes(): Promise<VisitTypeDefinition[]>
   saveVisitType(visitType: Omit<VisitTypeDefinition, "id"> & { id?: string }): Promise<VisitTypeDefinition>
+  // Permanent. The backend refuses a type any visit has ever used with 409; deactivate instead.
+  deleteVisitType(id: string): Promise<void>
   getVisitorCards(): Promise<VisitorCardInventoryItem[]>
   createVisitorCard(input: CreateVisitorCardInput): Promise<VisitorCardInventoryItem>
   updateVisitorCardInventory(id: string, input: UpdateVisitorCardInventoryInput): Promise<VisitorCardInventoryItem>

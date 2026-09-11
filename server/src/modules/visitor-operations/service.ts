@@ -75,6 +75,10 @@ export class VisitorOperationsService {
   async createVisitType(input: { name: string; active: boolean }) { return this.saveVisitType(undefined, input) }
   async updateVisitType(id: string, input: { name: string; active: boolean }) { await this.requireVisitType(id); return this.saveVisitType(id, input) }
   async setVisitTypeActive(id: string, active: boolean) { const current = await this.requireVisitType(id); return this.repository.saveVisitType({ id, name: current.name, nameNormalized: normalizeVisitTypeName(current.name), active }) }
+  async deleteVisitType(id: string) {
+    await this.requireVisitType(id)
+    if (!await this.repository.deleteVisitType(id)) throw new ApiError(409, "VISIT_TYPE_IN_USE", "Bu ziyaret türü en az bir ziyarette kullanıldığı için silinemez; pasife alın.")
+  }
 
   async listMeetings(ctx: AccessContext) {
     const meetings = await this.repository.listMeetings()
